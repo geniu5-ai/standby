@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -93,23 +94,62 @@ async def send_message(request: Request) -> JSONResponse:
     return JSONResponse(result.body, status_code=result.status_code)
 
 
+CONVERSATIONS_DEFAULT_LIMIT = 100
+CONVERSATIONS_MAX_LIMIT = 1000
+
+
+def clamp_conversations_limit(raw: int | None) -> int:
+    """Limite pedido pelo app: padrao 100 (como sempre foi), no maximo 1000."""
+    if raw is None:
+        return CONVERSATIONS_DEFAULT_LIMIT
+    return max(1, min(int(raw), CONVERSATIONS_MAX_LIMIT))
+
+
+def parse_changed_since(raw: str | None) -> datetime | None:
+    """ISO-8601 do ``changed_since``; invalido vira 422 (nunca vai para o SQL como texto)."""
+    if raw is None or raw == "":
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid changed_since") from None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 @router.get("/conversations")
-async def list_conversations(request: Request, tenant_id: str) -> list[dict]:
+async def list_conversations(
+    request: Request,
+    tenant_id: str,
+    limit: int | None = None,
+    changed_since: str | None = None,
+) -> list[dict]:
+    """Conversas do tenant, mais recentes primeiro.
+
+    Sem parametros: as 100 mais recentes (comportamento de sempre). ``limit`` (1..1000) sobe o teto.
+    ``changed_since`` (ISO-8601) devolve so as conversas que mudaram depois disso (mensagem nova,
+    win/loss/block, equipe assumindo ou devolvendo): o app usa para o CRM nao perder uma conversa
+    antiga que foi marcada como perdida em unidade grande. ``updated_at`` vai em cada linha.
+    """
     _verify(request)
+    since = parse_changed_since(changed_since)
     rows = fetch_all(
         """
         SELECT phone, name, push_name, status, automation_state,
-               last_seen, last_intent, tags
+               last_seen, last_intent, tags, updated_at
         FROM genius_next.clients
         WHERE tenant_id = :tenant_id
-        ORDER BY last_seen DESC NULLS LAST
-        LIMIT 100
+          AND (CAST(:since AS timestamptz) IS NULL
+               OR GREATEST(updated_at, last_seen) > CAST(:since AS timestamptz))
+        ORDER BY GREATEST(updated_at, last_seen) DESC NULLS LAST
+        LIMIT :limit
         """,
-        {"tenant_id": tenant_id},
+        {"tenant_id": tenant_id, "since": since, "limit": clamp_conversations_limit(limit)},
     )
     for r in rows:
         if r.get("last_seen"):
             r["last_seen"] = r["last_seen"].isoformat()
+        if r.get("updated_at"):
+            r["updated_at"] = r["updated_at"].isoformat()
         r["tags"] = list(r.get("tags") or [])
     return rows
 
