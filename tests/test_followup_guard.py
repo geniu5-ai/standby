@@ -412,6 +412,7 @@ def test_send_text_turn_starts_status_audit_after_delivery(
     from app.contracts import EvolutionWebhook, ReplyDraft, TurnRelease
     from app.security.guard import GuardAssessment
     from app.durable import flow
+    from app.durable.persistence import ClaimedEvent, ClaimedTurn
     from app.identity import build_trusted_ingress
 
     webhook = EvolutionWebhook.model_validate(
@@ -430,11 +431,29 @@ def test_send_text_turn_starts_status_audit_after_delivery(
         }
     )
     event = build_trusted_ingress(webhook, tenant_id="tenant-a")
-    turn = SimpleNamespace(
-        turn_id="turn-1",
+    # ClaimedTurn de verdade (como app/durable/persistence.py monta): o fluxo le provider e events,
+    # e um SimpleNamespace de 4 campos escondia essa mudanca de contrato.
+    turn = ClaimedTurn(
+        turn_id=f"turn:{'0' * 63}1",
+        conversation_id=event.conversation_id,
         tenant_id="tenant-a",
-        remote_jid="5511999999999@s.whatsapp.net",
+        provider=event.identity.provider,
         instance="genius",
+        remote_jid="5511999999999@s.whatsapp.net",
+        first_sequence=1,
+        last_sequence=1,
+        event_count=1,
+        events=[
+            ClaimedEvent(
+                event_row_id=1,
+                message_id="followup-guard",
+                sequence=1,
+                message_type="conversation",
+                direction="inbound",
+                text_content="oi",
+                sanitized_payload=webhook,
+            )
+        ],
     )
     started: list[tuple[Any, ...]] = []
     decision = SimpleNamespace(
@@ -459,9 +478,11 @@ def test_send_text_turn_starts_status_audit_after_delivery(
             deterministic=False,
         ),
     )
+    # O fluxo escolhe o motor em _draft_reply (REPLY_ENGINE, hoje "agent"); trocar draft_reply_step
+    # nao cobre o caminho do agente. Este e o ponto estavel para fixar o rascunho.
     monkeypatch.setattr(
         flow,
-        "draft_reply_step",
+        "_draft_reply",
         lambda *_args, **_kwargs: (
             ReplyDraft(action="send_text", text="oi"),
             returned_status,

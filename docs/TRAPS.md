@@ -188,3 +188,12 @@ que a corrige. As do Next que também valem aqui estão citadas pelo número del
 **Falta (chairman):** rotacionar a chave no painel do CPFHub; tirar do código não apaga o histórico.
 
 **Regra:** chave de API nunca é valor padrão de `os.getenv`. Varredura: `git grep -nE 'getenv\([^)]*, *"[A-Za-z0-9_-]{16,}"'`.
+
+### 22. Teste de follow-up escondia mudança de contrato com stubs
+**Data:** 08/nov/2026 | **Impacto:** 5 testes de `tests/test_followup_guard.py` falhavam com `AttributeError` sem ninguém ver: o CI não roda `pytest` e a suíte local não tinha Postgres.
+
+**Causa:** (1) o teste montava o turno com um `SimpleNamespace` de 4 campos, mas o fluxo lê `provider` e `events` do `ClaimedTurn`; (2) o teste fixava `flow.draft_reply_step`, mas `REPLY_ENGINE` é `agent` por padrão e o fluxo escolhe o motor em `_draft_reply`, então o patch não valia e o motor real rodava.
+
+**Correção:** o teste monta um `ClaimedTurn` de verdade (como `persistence.py`) e fixa `flow._draft_reply`.
+
+**Regra:** stub de contrato Pydantic usa o próprio modelo, não `SimpleNamespace`. Fixe o ponto em que o fluxo escolhe o motor, não a função de um dos motores. Rode `pytest -q tests` com o Postgres de teste (`docs/OPERACAO.md`, "Suíte completa") antes de mergear.

@@ -216,6 +216,27 @@ prótese flexível?" → turno `completed`, resposta com o preço do catálogo (
 
 Sem rede e sem banco (modelo falso, guardrails e agente): `pytest -q tests`.
 
+### Suíte completa, com o Postgres de teste da VPS 003
+
+Os testes de follow-up e o de migração precisam de Postgres. A 003 tem um Postgres 17 de **teste** só em
+`127.0.0.1`. O `pytest` roda **aqui, no container** (o repositório nunca vai para a VPS); a conexão passa por
+um relé local (`scripts/pg_relay_003.py`: uma sessão `tailscale ssh` por conexão, sem listener no VPS).
+
+- Role `standby_test` (LOGIN, sem superusuário, sem DDL no banco do Next): lê e escreve no schema
+  `genius_next` de `genius_next_test` (usado como `DATABASE_URL`) e é dona do banco `standby_migration_test`
+  (usado como `GENIUS_NEXT_TEST_DATABASE_URL`, porque o teste de migração cria objetos).
+- A URL de conexão está no cofre: `STANDBY_TEST_DATABASE_URL` (apontada para a porta do relé).
+
+```bash
+python scripts/pg_relay_003.py &
+BASE="$(python scripts/vault.py get STANDBY_TEST_DATABASE_URL)"
+DATABASE_URL="$BASE" GENIUS_NEXT_TEST_DATABASE_URL="${BASE%/*}/standby_migration_test" pytest -q tests
+```
+
+Resultado em 08/nov/2026: `255 passed, 8 skipped` (os 8 dependem de arquivos que só existem no Genius Next,
+`docs/PARIDADE.md`). O CI atual (`monitor`, `neon-preview-deploy`, `wake`) não roda `pytest`: rode isto antes
+de mergear mudança em `app/`. Não use `genius_dev`, `genius_app` nem as outras roles da 003.
+
 ## O que já deu errado e por quê
 
 Ver [`TRAPS.md`](TRAPS.md): dezessete armadilhas, cada uma com sintoma, causa, correção e regra. As mais
