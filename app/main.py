@@ -47,7 +47,7 @@ from app.jobs import TASK_MODULES, jobs_worker
 from app.metrics import WEBHOOK_LATENCY, render_metrics
 from app.rate_limit import rate_limit_allow
 from app.loop_guard import loop_guard_allow
-from app.settings import get_settings
+from app.settings import Settings, get_settings
 from app.tenant_registry import (
     is_tenant_disabled,
     resolve_tenant,
@@ -566,8 +566,6 @@ async def control_wake(request: Request) -> dict[str, Any]:
     o Procrastinate retoma sozinho jobs vencidos, travados e o ultimo tick de cada relogio;
     aqui so se confirma que o worker esta de pe e se mostra a fila. Somente leitura.
     """
-    from app import wake
-
     runtime_settings = get_settings()
     secret_setting = runtime_settings.CONTROL_HMAC_SECRET
     if secret_setting is None:
@@ -584,6 +582,13 @@ async def control_wake(request: Request) -> dict[str, Any]:
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    return await _estado_do_wake(runtime_settings, origem="hmac")
+
+
+async def _estado_do_wake(runtime_settings: Settings, *, origem: str) -> dict[str, Any]:
+    """Miolo comum das rotas de wake: le o que esta esperando (somente leitura)."""
+    from app import wake
+
     try:
         estado = (
             await asyncio.to_thread(
@@ -594,8 +599,36 @@ async def control_wake(request: Request) -> dict[str, Any]:
         ).as_dict()
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Service unavailable") from exc
-    logging.getLogger("app").info("wake: %s", estado)
+    logging.getLogger("app").info("wake (%s): %s", origem, estado)
     return {"status": "awake", **estado}
+
+
+@app.post("/v1/control/qstash-wake")
+async def control_qstash_wake(request: Request) -> dict[str, Any]:
+    """Wake agendado pelo QStash: a chamada ja acorda o servico, a rota confirma e mostra a fila.
+
+    Autentica pela assinatura da Upstash (``Upstash-Signature``, JWT HS256 sobre o corpo), nao
+    pelo HMAC de controle. Mesma resposta de ``/v1/control/wake``. Somente leitura.
+    """
+    from app.qstash_auth import HEADER, assinatura_valida
+
+    runtime_settings = get_settings()
+    current = runtime_settings.QSTASH_CURRENT_SIGNING_KEY
+    if current is None:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    proxima = runtime_settings.QSTASH_NEXT_SIGNING_KEY or current
+    body = await _read_limited_body(
+        request, max_bytes=runtime_settings.WEBHOOK_MAX_BODY_BYTES
+    )
+    if not assinatura_valida(
+        body,
+        request.headers.get(HEADER),
+        current_key=current.get_secret_value(),
+        next_key=proxima.get_secret_value(),
+        url=runtime_settings.QSTASH_WAKE_URL or None,
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return await _estado_do_wake(runtime_settings, origem="qstash")
 
 
 @app.post("/v1/control/tenant_registry")

@@ -36,6 +36,7 @@ O plano free **dorme após ~15 min sem tráfego de entrada**: a primeira chamada
 | `HMAC_SECRET` | assinatura do `/webhook/evolution` (`X-Hub-Signature-256` ou `X-Evolution-Token`) |
 | `CONTROL_HMAC_SECRET` | assinatura de `/v1/control/*`, incluindo `/v1/control/wake`; sem ele esses endpoints respondem 503 |
 | `EVOLUTION_URL`, `EVOLUTION_API_KEY` | Evolution (histórico e "digitando"); com `record_only` nada é enviado |
+| `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`, `QSTASH_WAKE_URL` | wake pelo QStash: chaves de assinatura (console do QStash) e a URL do destino do schedule; sem a chave atual `/v1/control/qstash-wake` responde 503 |
 | `OMNIROUTE_API_KEY` | OmniRoute (resumos, motor legacy) |
 | `REPLY_ENGINE=agent`, `REPLY_AGENT_MODEL=openai:gpt-pool` | motor de resposta = Pydantic AI pelo combo `gpt-pool` do OmniRoute (o mesmo da produção, TRAPS #68 do Next) |
 | `OPENAI_BASE_URL=https://omni.geniuslabs.pro/v1`, `OPENAI_API_KEY` | como o Pydantic AI alcança o OmniRoute |
@@ -237,6 +238,11 @@ que consulta o Neon com a role `wake_ro`, de leitura e, só se houver trabalho v
 | Segredo do GitHub | `CONTROL_HMAC_SECRET` | o mesmo valor definido no Render |
 | Variável do Render | `CONTROL_HMAC_SECRET` | habilita `/v1/control/wake` (sem ele responde 503) |
 | Variável do GitHub (opcional) | `WAKE_TENANTS` | tenants separados por vírgula; vazio = todos |
+
+**Wake pelo QStash (11/nov/2026):** `POST /v1/control/qstash-wake`, assinado pela Upstash, chamado
+pelo schedule `standby-wake` (`scripts/qstash_schedule.py`). `QSTASH_TOKEN` e `QSTASH_URL` servem só a
+esse script e ficam fora do Render; as chaves de assinatura são variáveis do Render. Desenho,
+custo e a conta de horas do Render em [`WAKE.md`](WAKE.md).
 
 Teste manual: *Actions → Wake do worker → Run workflow* na `main`, com `force`. Resultado
 esperado: job verde e `{"status": "awake", "jobs_vencidos": 0, ...}`. Verificado em 03/nov/2026.

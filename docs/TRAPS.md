@@ -188,3 +188,12 @@ que a corrige. As do Next que também valem aqui estão citadas pelo número del
 **Falta (chairman):** rotacionar a chave no painel do CPFHub; tirar do código não apaga o histórico.
 
 **Regra:** chave de API nunca é valor padrão de `os.getenv`. Varredura: `git grep -nE 'getenv\([^)]*, *"[A-Za-z0-9_-]{16,}"'`.
+
+### 22. O snippet do console do QStash passa a URL antes do token, ao contrário do SDK
+**Data:** 11/nov/2026 | **Impacto:** `QStash("https://qstash-us-east-1.upstash.io", "<token>")`, como o console mostra, não serve para o `qstash` 3.4: o primeiro argumento posicional é o token, então a URL seria usada como token.
+
+**Causa:** a assinatura real é `QStash(token, *, retry=None, base_url=None)` (conferida com `inspect.signature`).
+
+**Correção:** `QStash(token, base_url=url)` em `scripts/qstash_schedule.py`.
+
+**Regra:** conferir a assinatura do SDK instalado antes de colar um snippet de console. O `url` do `Receiver` é comparado com o `sub` do JWT, que é o **destino do schedule**; configure `QSTASH_WAKE_URL` com a URL pública exata (`https://genius-next-serverless.onrender.com/v1/control/qstash-wake`), não a que o app enxerga atrás do proxy.

@@ -86,7 +86,7 @@ inclui os `README.md` dentro de `app/`: editar um só de um lado conta como dive
 |---|---|---|
 | Diferentes | `app/main.py`, `app/observability.py`, `app/status/audit.py`, `app/webapp/router.py` | **ainda não analisados um a um**: investigar antes de dizer "paridade total" |
 | Só no Next | `app/curator/*`, `app/embed/main.py` | diferença deliberada (sem sidecar nem curadoria no Render) |
-| Só no Standby | `app/wake.py` | diferença deliberada (acorda o worker no Render free) |
+| Só no Standby | `app/wake.py`, `app/qstash_auth.py` | diferença deliberada (acordam o worker no Render free: Actions e QStash) |
 | Idênticos e sensíveis a mudança | `app/durable/followup.py`, `app/status/rules.py`, `app/reply/llm.py`, `app/reply/prompt_profiles.py` | o patch do follow-up de 03/nov entrou nos quatro |
 
 Paridade de **comportamento** (não só de arquivo) ainda por comparar, módulo a módulo: classificação de status,

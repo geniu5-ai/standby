@@ -19,6 +19,7 @@ dependencies = [
     "procrastinate>=3.10,<4",
     "psycopg-pool>=3.3.3",
     "deepeval==4.2.0",
+    "qstash>=3.4,<4",
 ]
 
 [dependency-groups]

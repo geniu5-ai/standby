@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # to HMAC_SECRET, which authenticates Evolution ingress.
     CONTROL_HMAC_SECRET: SecretStr | None = None
     CONTROL_HMAC_MAX_AGE_SECONDS: int = Field(default=300, ge=30, le=900)
+    # Wake agendado pelo QStash (Upstash): chaves de assinatura atual/proxima (console do QStash)
+    # e a URL do destino do schedule, conferida contra o ``sub`` do JWT. Sem a chave atual a
+    # rota /v1/control/qstash-wake responde 503 (fail-closed).
+    QSTASH_CURRENT_SIGNING_KEY: SecretStr | None = None
+    QSTASH_NEXT_SIGNING_KEY: SecretStr | None = None
+    QSTASH_WAKE_URL: str = ""
     # Tempo sem ato da equipe ate a marcacao de dono humano (automation_state
     # 'crew', o "Humano" do App, a "equipe" do chairman) voltar sozinha para o
     # bot (open).  Ato da equipe = a marcacao (handoff automatico com prazo ou

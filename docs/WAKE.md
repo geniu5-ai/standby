@@ -94,6 +94,46 @@ O que conta como "trabalho vencido" (qualquer um acorda):
 | 1 | havia trabalho e não conseguiu acordar (4 tentativas) |
 | 2 | erro de uso ou de banco (variável faltando, URL inválida, banco inacessível) |
 
+## Wake pelo QStash (11/nov/2026)
+
+Segundo gatilho do mesmo desenho, no lugar do relógio do GitHub, cujo `schedule` é best effort e
+atrasa minutos. O QStash (Upstash, região `us-east-1`) chama o Standby por HTTP em horário marcado.
+
+```
+QStash schedule `standby-wake` (*/20 * * * *)        Render (free)                 Neon
+        │── POST /v1/control/qstash-wake ───────────▶ acorda (~60 s)
+        │   Upstash-Signature (JWT HS256 + hash do corpo)   │── estado da fila ──────▶│
+        │◀── 200 {"status":"awake", ...} ───────────────────│
+```
+
+Peças: `app/qstash_auth.py` (verifica a assinatura com a chave atual ou a próxima), a rota
+`/v1/control/qstash-wake` em `app/main.py` (mesma resposta, somente leitura, do `/v1/control/wake`) e
+`scripts/qstash_schedule.py` (cria/atualiza o schedule `standby-wake`; sem `--aplicar` só simula).
+
+Diferenças para o Actions, de propósito:
+
+- **A chamada sempre acorda o serviço.** O Actions consultava o Neon antes e deixava o Render dormir
+  sem trabalho vencido; o QStash não tem acesso ao banco. A cada 20 min o serviço fica acordado
+  cerca de 16 de cada 20 min (~600 h por mês). Com `*/10` ficaria acordado o tempo todo: ~744 h das
+  750 h gratuitas do mês, o que só cabe porque o workspace tem **um único serviço free**. Um segundo
+  serviço free estoura a conta e o Render suspende os dois.
+- **Custo:** cada disparo é uma mensagem; `*/20` gasta 72 por dia (o plano free do QStash tem 1000
+  por dia, retentativas contam). Dinheiro continua zero (trava 3).
+- **Entrega:** timeout de 120 s (cobre o cold start) e 3 retentativas com espera crescente.
+- **Autenticação:** não usa o `CONTROL_HMAC_SECRET`. Sem `QSTASH_CURRENT_SIGNING_KEY` a rota
+  responde 503; assinatura ausente, errada, vencida ou de outro destino responde 401.
+- **O `wake.yml` continua** como reserva até o QStash provar uma semana de disparos (console do
+  QStash, aba Logs). Depois disso ele pode ser desligado.
+
+Para ativar: variáveis do Render `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` e
+`QSTASH_WAKE_URL` (a URL do destino), deploy e `python scripts/qstash_schedule.py apply --aplicar`
+(precisa de `QSTASH_TOKEN` e `QSTASH_URL` no ambiente).
+
+Fora do escopo desta entrega, mas disponível no QStash: **Flow Control** (limite de paralelismo e de
+taxa por chave, por exemplo uma chave por tenant para limitar chamadas simultâneas ao modelo) e
+mensagens com atraso exato (`Upstash-Not-Before`, até 7 dias no plano free) para acordar na hora de
+um follow-up longo.
+
 ## Configuração
 
 Ver "Segredos e credenciais" e "Wake do worker" em [`OPERACAO.md`](OPERACAO.md).
@@ -116,5 +156,7 @@ Ver "Segredos e credenciais" e "Wake do worker" em [`OPERACAO.md`](OPERACAO.md).
 1. **Failover** (não implementado): o mesmo workflow checa a saúde da VPS 002 e, só se ela estiver
    fora por N execuções seguidas, acorda o Standby e liga `DELIVERY_MODE=live`, com uma trava para
    nunca dois agentes responderem ao mesmo cliente.
-2. QStash para acordar na hora exata de follow-ups longos.
+2. QStash com mensagem atrasada (`Upstash-Not-Before`) para acordar na hora exata de follow-ups
+   longos, em vez do schedule fixo. Mexe no `app/durable/followup.py`, que é idêntico ao do Next:
+   exige PR espelho.
 3. `MANAGER_PENDENTES_TENANTS` definido, para o `pendentes_sweep` abordar quem ficou sem resposta.
