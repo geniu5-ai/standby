@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # API de envio. Ambos ausentes = o canal Zernio falha FECHADO (webhook 503,
     # envio recusado); nenhum dos dois e exigido para o processo subir.
     ZERNIO_WEBHOOK_SECRET: SecretStr | None = None
+    # Conector externo (OpenWA, waxum; connectors/wa-bridge): segredo PROPRIO da rota
+    # /webhook/connector. Nunca cai para HMAC_SECRET (Evolution): sem ele a rota responde 503.
+    CONNECTOR_HMAC_SECRET: SecretStr | None = None
     ZERNIO_API_KEY: SecretStr | None = None
     ZERNIO_API_URL: str = "https://zernio.com/api"
     # Instancia Evolution existente usada so como contingencia do aviso de
