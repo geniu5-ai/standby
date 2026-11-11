@@ -6,8 +6,7 @@ O `CLAUDE.md` é uma cópia gerada do `AGENTS.md`: edite só o `AGENTS.md` e rod
 Procrastinate, Render + Neon). Leia primeiro [`docs/HANDOFF.md`](docs/HANDOFF.md),
 [`docs/OPERACAO.md`](docs/OPERACAO.md) e [`docs/WAKE.md`](docs/WAKE.md). As regras da casa do Genius
 Dev, de onde estas derivam, estão copiadas em [`docs/GENIUS-DEV-AGENTS.md`](docs/GENIUS-DEV-AGENTS.md)
-(fonte: `Genius-Dev/AGENTS.md`, VPS 003). **Onde este arquivo divergir daquele, vale este, só para o
-Standby**: aqui as regras são mais simples e flexíveis (ordem do chairman).
+(fonte: `Genius-Dev/AGENTS.md`). **Escopo (ordem do chairman, 11/nov/2026): essas regras da casa valem só para a VPS 003.** Não valem para o Standby nem para o Genius Next, que agenda pelo Procrastinate. Onde este arquivo divergir daquele, vale este (ordem do chairman).
 
 ## Quem você é aqui
 
