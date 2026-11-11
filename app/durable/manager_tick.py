@@ -41,7 +41,7 @@ from app.settings import get_settings
 logger = logging.getLogger(__name__)
 
 # Cinco campos, UTC: a cada minuto cheio (o Procrastinate nao tem segundos).
-MANAGER_TICK_CRON = "* * * * *"
+MANAGER_TICK_CRON = "*/10 * * * *"  # Neon free: a cada 10 min (ver app/jobs.py)
 # Teto de itens disparados por tick; o resto fica para o proximo minuto.
 MANAGER_TICK_LIMIT = 50
 # Tipos que o tick executa. Os outros kinds de manager_items (promessa,
