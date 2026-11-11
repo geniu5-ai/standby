@@ -37,7 +37,7 @@ from app.hmac_auth import (
     verify_zernio_signature,
 )
 from app.identity import build_trusted_ingress
-from app.ingress.connector import SIGNATURE_HEADER, TIMESTAMP_HEADER, ConnectorEnvelope
+from app.ingress.connector import SIGNATURE_HEADER, TIMESTAMP_HEADER, ConnectorEnvelope, RelayAck
 from app.ingress.zernio import (
     SUPPORTED_EVENTS as ZERNIO_SUPPORTED_EVENTS,
     ZernioEventIgnored,
@@ -508,6 +508,75 @@ async def _process_connector_webhook(request: Request) -> dict[str, str]:
     return await _accept_ingress(
         webhook, provider="evolution", runtime_settings=runtime_settings
     )
+
+
+def _require_connector_signature(request: Request, body: bytes, runtime_settings: Any) -> None:
+    """Assinatura do conector (``timestamp.corpo``, segredo PROPRIO); GET assina corpo vazio."""
+    secret_setting = runtime_settings.CONNECTOR_HMAC_SECRET
+    secret = secret_setting.get_secret_value() if secret_setting is not None else ""
+    if not secret:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    if not verify_control_signature(
+        body,
+        request.headers.get(TIMESTAMP_HEADER),
+        request.headers.get(SIGNATURE_HEADER),
+        secret,
+        max_age_seconds=runtime_settings.CONTROL_HMAC_MAX_AGE_SECONDS,
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@app.get("/v1/connector/outbox")
+async def connector_outbox(request: Request) -> dict[str, Any]:
+    """Respostas gravadas (record_only) das instancias do conector, ainda nao entregues.
+
+    O Standby segue em record_only para todos; so instancias de ``CONNECTOR_RELAY_INSTANCES``, de
+    ate ``CONNECTOR_RELAY_MAX_AGE_SECONDS`` e uma unica vez cada (``app/durable/connector_relay.py``).
+    """
+    from app.durable import connector_relay
+
+    runtime_settings = get_settings()
+    body = await _read_limited_body(request, max_bytes=runtime_settings.WEBHOOK_MAX_BODY_BYTES)
+    _require_connector_signature(request, body, runtime_settings)
+    try:
+        items = await asyncio.to_thread(
+            connector_relay.list_pending,
+            runtime_settings.DATABASE_URL,
+            instances=connector_relay.parse_instances(runtime_settings.CONNECTOR_RELAY_INSTANCES),
+            max_age_s=runtime_settings.CONNECTOR_RELAY_MAX_AGE_SECONDS,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Service unavailable") from exc
+    return {"items": items}
+
+
+@app.post("/v1/connector/outbox/{outbox_id}/ack")
+async def connector_outbox_ack(outbox_id: int, request: Request) -> dict[str, str]:
+    """O conector confirma a entrega: anota ``provider_result.relay``; 404 se a linha nao e elegivel."""
+    from app.durable import connector_relay
+
+    runtime_settings = get_settings()
+    body = await _read_limited_body(request, max_bytes=runtime_settings.WEBHOOK_MAX_BODY_BYTES)
+    _require_connector_signature(request, body, runtime_settings)
+    try:
+        ack = RelayAck.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Invalid ack") from exc
+    try:
+        anotada = await asyncio.to_thread(
+            connector_relay.acknowledge,
+            runtime_settings.DATABASE_URL,
+            outbox_id=outbox_id,
+            instances=connector_relay.parse_instances(runtime_settings.CONNECTOR_RELAY_INSTANCES),
+            status=ack.status,
+            provider_message_id=ack.provider_message_id,
+            error=ack.error,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Service unavailable") from exc
+    if not anotada:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"status": "acked"}
 
 
 @app.post("/webhook/zernio", status_code=status.HTTP_202_ACCEPTED)

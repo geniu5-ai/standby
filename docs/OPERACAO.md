@@ -38,6 +38,7 @@ O plano free **dorme após ~15 min sem tráfego de entrada**: a primeira chamada
 | `EVOLUTION_URL`, `EVOLUTION_API_KEY` | Evolution (histórico e "digitando"); com `record_only` nada é enviado |
 | `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`, `QSTASH_WAKE_URL` | wake pelo QStash: chaves de assinatura (console do QStash) e a URL do destino do schedule; sem a chave atual `/v1/control/qstash-wake` responde 503 |
 | `CONNECTOR_HMAC_SECRET` | segredo PROPRIO da rota `/webhook/connector` (conector OpenWA/waxum, `connectors/wa-bridge/`); assinatura `timestamp.corpo`; sem ele a rota responde 503 e ele nunca cai para o `HMAC_SECRET` da Evolution |
+| `CONNECTOR_RELAY_INSTANCES`, `CONNECTOR_RELAY_MAX_AGE_SECONDS` | saída pelo conector sem sair do `record_only`: instâncias cujas respostas gravadas o conector pode buscar em `/v1/connector/outbox` (vazia = nada sai) e idade máxima da resposta (padrão 900 s) |
 | `OMNIROUTE_API_KEY` | OmniRoute (resumos, motor legacy) |
 | `REPLY_ENGINE=agent`, `REPLY_AGENT_MODEL=openai:gpt-pool` | motor de resposta = Pydantic AI pelo combo `gpt-pool` do OmniRoute (o mesmo da produção, TRAPS #68 do Next) |
 | `OPENAI_BASE_URL=https://omni.geniuslabs.pro/v1`, `OPENAI_API_KEY` | como o Pydantic AI alcança o OmniRoute |

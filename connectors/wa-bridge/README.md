@@ -33,6 +33,33 @@ OpenWA --webhook assinado--> wa-bridge --envelope assinado--> Standby /webhook/c
 Rodar: `python wa_bridge.py`. Saúde: `GET /health` (estado da fila). Webhook do gateway:
 `POST /in/openwa`.
 
+## Saída: a resposta volta ao WhatsApp, sem o Standby sair do `record_only`
+
+O Standby continua gravando toda resposta no `outbox` como `record_only`/`recorded`. Para as instâncias que o
+conector representa, o conector **busca** as respostas gravadas e as entrega pelo gateway:
+
+```
+Standby (record_only) <--GET /v1/connector/outbox (assinado)-- wa-bridge --send-text--> OpenWA --> WhatsApp
+                      <--POST .../ack (assinado)-----------
+```
+
+- **Quatro travas**, todas fail-closed: (1) o Standby só devolve instâncias de `CONNECTOR_RELAY_INSTANCES`
+  (vazia = nada sai), `kind=customer`, `send_text`, `record_only`, de **no máximo 15 min** e **uma vez só**;
+  (2) o conector só envia a destinos da lista local `SEND_ALLOWLIST` (vazia = não envia nada); (3) só para
+  instâncias mapeadas em `OPENWA_SESSION_MAP`; (4) registro local (`relayed`): nunca envia duas vezes, e um ack
+  que falhou é repetido sem reenviar.
+- A entrega é anotada em `provider_result.relay` (resultado, hora, id da mensagem; nunca o texto). Nenhum estado
+  novo no banco, e `delivery_status` segue `recorded`.
+- **Não mantém o Render acordado:** o conector só consulta por `RELAY_WINDOW_S` (padrão 300 s) depois de entregar
+  uma mensagem, a cada `RELAY_EVERY_S` (padrão 4 s). Fora da janela não consulta.
+- `NÃO é o modo live`: o Standby continua em `record_only` para todos os tenants e destinos. Ligar o `live` é
+  a trava 1 do `AGENTS.md`.
+
+| Variável do conector | Para quê |
+|---|---|
+| `SEND_ALLOWLIST` | números permitidos (só dígitos, separados por vírgula). Vazia = a saída fica desligada |
+| `RELAY_WINDOW_S`, `RELAY_EVERY_S` | janela de consulta depois de cada entrada e intervalo (padrão 300 e 4) |
+
 ## O que entra e o que é ignorado
 
 Só **texto recebido de uma pessoa**. Ignorados (200, sem erro): eventos que não são

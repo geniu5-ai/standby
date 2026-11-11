@@ -127,6 +127,15 @@ OpenWA --webhook assinado--> lab-wabridge --envelope assinado--> Standby /webhoo
 - Fila SQLite idempotente por `event_id`. Entrega com espera de 5 s a 6 h, até 10 tentativas (o Render free
   leva cerca de 60 s para acordar); 4xx de validação vai para mortos. Sem `OUT_URL`: modo seco.
 
+### Saída (resposta de volta ao WhatsApp)
+
+Sem tirar o Standby do `record_only`: o conector **busca** as respostas gravadas (`GET /v1/connector/outbox`,
+assinado) e as envia pelo OpenWA (`POST /api/sessions/{id}/messages/send-text`), confirmando em seguida
+(`POST /v1/connector/outbox/{id}/ack`). Travas: instância em `CONNECTOR_RELAY_INSTANCES` (Render), resposta de
+no máximo 15 min, uma vez só, destino em `SEND_ALLOWLIST` (conector, vazia = nada sai), instância mapeada e
+registro local contra envio duplicado. A consulta só ocorre por 5 min depois de cada mensagem entregue, então
+**não mantém o Render acordado**. Detalhes no README do conector.
+
 ### Estado em produção (11/nov/2026)
 
 - Standby no commit do PR #18; `CONNECTOR_HMAC_SECRET` cadastrado no Render; a rota responde 401 sem assinatura.
@@ -154,8 +163,9 @@ a sessão do WhatsApp: **não apagar sem desconectar o aparelho** no celular.
 ## Pendências
 
 1. **Mídia e grupos** no conector (hoje ignorados).
-2. **Saída:** responder pelo OpenWA. O app responde pela Evolution; um provedor novo exige mudar o `Literal`
-   de provedores em `contracts.py` (arquivo compartilhado: PR espelho no Next).
+2. **Saída para clientes reais:** hoje a saída é um relé por busca (abaixo), restrito a instâncias e destinos
+   listados. Responder de verdade para tenants exige um provedor novo no app (mudar o `Literal` de provedores em
+   `contracts.py`, arquivo compartilhado: PR espelho no Next) e a decisão do chairman sobre o `live` (trava 1).
 3. **waxum:** webhook (URL pública ou NATS) e adaptador. Lê `from_phone`, então não precisa resolver LID.
 4. **Ensaio de recuperação:** restaurar a sessão em outro servidor a partir do volume. Para SQLite, parar o
    contêiner ou usar `sqlite3 .backup` antes de copiar (o arquivo tem WAL).
