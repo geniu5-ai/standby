@@ -206,3 +206,22 @@ que a corrige. As do Next que também valem aqui estão citadas pelo número del
 **Correção:** o conector (`connectors/wa-bridge/`) resolve o LID por `GET /api/sessions/{id}/contacts/{lid}/phone` do próprio OpenWA (existe também `GET /contacts/{número}/lid`) e só então monta o `remoteJid`. LID sem resolução é ignorado, nunca entregue.
 
 **Regra:** nenhum adaptador de gateway entrega identificador que não seja telefone ao app. Conferido em teste real (10/11/2026, OpenWA 0.30.0, motor Baileys).
+
+### 24. Follow-up nunca disparava: "o paciente respondeu?" era por telefone, não por conversa
+**Data:** 11/nov/2026 | **Impacto:** nenhum `follow_up_send` era criado; todo `follow_up_wake` terminava em `stopped`, sem motivo gravado. Visto no teste do Standby com o tenant da Kyrios.
+
+**Causa:** `_INBOUND_AFTER_ORIGIN_SQL` (`app/durable/followup.py`) comparava só `conversation_sequence > origem`, sem olhar a conversa. O mesmo telefone tinha duas conversas no tenant: a de teste (sequência 4) e uma antiga por outra instância (sequência até 97, copiada do Next). As 28 mensagens antigas com sequência maior faziam a regra concluir que o paciente tinha respondido.
+
+**Correção:** na conversa do turno de origem (`provider`, `instance`, `remote_jid`) vale a sequência; em outra conversa do mesmo telefone vale o tempo (só o que chegou depois do turno de origem); sem a linha do turno, a regra antiga. Testes com SQL real em `tests/test_followup_conversa.py`.
+
+**Regra:** contador de sequência é por conversa; qualquer comparação por sequência precisa da chave da conversa. O arquivo é compartilhado com o Next: a mesma correção vai por PR espelho (`docs/PARIDADE.md`). Para diagnosticar, olhe os jobs do Procrastinate: `follow_up_start` e `follow_up_wake` com sucesso e nenhum `follow_up_send`.
+
+### 25. O relé do conector parava de consultar antes do follow-up sair
+**Data:** 11/nov/2026 | **Impacto:** o follow-up era gravado no `outbox`, mas não chegava ao WhatsApp de teste.
+
+**Causa:** o `wa-bridge` só consultava `/v1/connector/outbox` por 5 min depois de cada entrada (`RELAY_WINDOW_S`), e o primeiro follow-up sai aos 5 min.
+
+**Correção:** depois da janela rápida, uma fase lenta (`RELAY_SLOW_EVERY_S=30`) até `RELAY_SLOW_WINDOW_S=2700` (45 min), que cobre os follow-ups de 5 e 30 min. O de 23 h só é entregue se houver outra entrada nesse intervalo ou se a janela lenta for aumentada.
+
+**Regra:** janela de consulta do relé tem que cobrir o maior atraso de resposta que se quer entregar.
+

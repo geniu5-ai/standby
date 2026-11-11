@@ -373,6 +373,10 @@ class Config:
     send_allowlist: list[str] = field(default_factory=list)  # so digitos; vazia = nao envia nada
     relay_window_s: float = 300.0
     relay_every_s: float = 4.0
+    # Depois da janela rapida o relé segue consultando devagar, para entregar os follow-ups (5 e 30 min
+    # depois da ultima fala). RELAY_SLOW_WINDOW_S=0 desliga a fase lenta.
+    relay_slow_window_s: float = 2700.0
+    relay_slow_every_s: float = 30.0
     # "digitando..." para a pessoa, como o Next: comeca TYPING_PRE_DELAY_S depois da entrada e se renova
     # ate a resposta sair (ou TYPING_MAX_S). So para destinos de SEND_ALLOWLIST: nunca mostra digitando
     # para quem nao vai receber resposta.
@@ -413,6 +417,8 @@ class Config:
             send_allowlist=[d for d in (digits(x) for x in env.get("SEND_ALLOWLIST", "").split(",")) if d],
             relay_window_s=float(env.get("RELAY_WINDOW_S", "300")),
             relay_every_s=float(env.get("RELAY_EVERY_S", "4")),
+            relay_slow_window_s=float(env.get("RELAY_SLOW_WINDOW_S", "2700")),
+            relay_slow_every_s=float(env.get("RELAY_SLOW_EVERY_S", "30")),
             typing_enabled=env.get("TYPING_ENABLED", "1").strip() not in ("0", "false", "no", ""),
             typing_pre_delay_s=float(env.get("TYPING_PRE_DELAY_S", "5")),
             typing_refresh_s=float(env.get("TYPING_REFRESH_S", "4")),
@@ -488,14 +494,21 @@ class Relay:
         self.cfg, self.spool, self.client, self._request = cfg, spool, client, request
         self.typist = typist
         self.poll_until = 0.0
+        self.fast_until = 0.0
 
     @property
     def enabled(self) -> bool:
         return bool(self.cfg.out_url and self.cfg.send_allowlist and self.cfg.sessions and self.client)
 
+    def interval(self, now: float | None = None) -> float:
+        """Intervalo entre consultas: rapido logo depois da entrada, lento ate o fim da janela de follow-up."""
+        now = time.time() if now is None else now
+        return self.cfg.relay_every_s if now < self.fast_until else self.cfg.relay_slow_every_s
+
     def arm(self, now: float | None = None) -> None:
         now = time.time() if now is None else now
-        self.poll_until = max(self.poll_until, now + self.cfg.relay_window_s)
+        self.fast_until = max(self.fast_until, now + self.cfg.relay_window_s)
+        self.poll_until = max(self.poll_until, now + max(self.cfg.relay_window_s, self.cfg.relay_slow_window_s))
 
     def _signed(self, body: bytes, now: float) -> dict[str, str]:
         ts = str(int(now))
@@ -632,7 +645,7 @@ def worker_loop(
             trabalho = deliver_due(spool, cfg, on_delivered=relay.arm if relay else None)
             if typist is not None:
                 trabalho += typist.step()
-            if relay is not None and time.time() - ultimo_relay >= cfg.relay_every_s:
+            if relay is not None and time.time() - ultimo_relay >= relay.interval():
                 ultimo_relay = time.time()
                 trabalho += relay.step()
             if not trabalho:
