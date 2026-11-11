@@ -313,3 +313,172 @@ def test_ponta_a_ponta_com_lid_resolvido_pela_api_do_gateway(tmp_path):
 def test_config_le_o_mapa_de_sessoes_e_o_modo_seco():
     cfg = wb.Config.from_env({"OPENWA_SESSION_MAP": "s1:inst-a, s2:inst-b", "BRIDGE_LISTEN": "127.0.0.1:9000", "OPENWA_WEBHOOK_SECRET": "x"})
     assert cfg.sessions == {"s1": "inst-a", "s2": "inst-b"} and cfg.listen_port == 9000 and cfg.out_url == ""
+
+
+# --- saida: resposta de volta ao WhatsApp, so a destinos permitidos ----------------------------
+
+PERMITIDO = "5511900001111"
+
+
+class GatewayFalso:
+    """Cliente do gateway com resultados roteirizados; guarda o que tentou enviar."""
+
+    def __init__(self, *resultados):
+        self.resultados = list(resultados) or [("sent", "WA-1", None)]
+        self.enviados: list[tuple[str, str, str]] = []
+
+    def send_text(self, session_id, chat_id, text):
+        self.enviados.append((session_id, chat_id, text))
+        return self.resultados.pop(0) if len(self.resultados) > 1 else self.resultados[0]
+
+
+class StandbyFalso:
+    """Registra as chamadas assinadas do conector e responde ao roteiro."""
+
+    def __init__(self, itens, ack_code=200):
+        self.itens, self.ack_code, self.chamadas = itens, ack_code, []
+
+    def __call__(self, method, url, body, headers, timeout):
+        self.chamadas.append((method, url, body, headers))
+        assert verify_control_signature(body or b"", headers[wb.TIMESTAMP_HEADER], headers[wb.SIGNATURE_HEADER], SEG_SAIDA)
+        if method == "GET":
+            return 200, json.dumps({"items": self.itens}).encode()
+        if isinstance(self.ack_code, Exception):
+            raise self.ack_code
+        return self.ack_code, b"{}"
+
+
+def _item(id=41, instance="instancia-de-teste", phone=PERMITIDO, text="Oi! Sou a Lia."):
+    return {"id": id, "instance": instance, "destination_jid": f"{phone}@s.whatsapp.net", "text": text}
+
+
+def _relay(tmp_path, itens, *, gateway=None, ack_code=200, allow=(PERMITIDO,)):
+    cfg = wb.Config(
+        sessions={SESSAO: "instancia-de-teste"}, out_url="https://standby.exemplo.test/webhook/connector",
+        out_secret=SEG_SAIDA, send_allowlist=list(allow), data_dir=str(tmp_path),
+    )
+    spool = wb.Spool(str(tmp_path / "spool.sqlite"))
+    standby = StandbyFalso(itens, ack_code)
+    gw = gateway or GatewayFalso()
+    relay = wb.Relay(cfg, spool, gw, request=standby)
+    relay.arm()
+    return relay, spool, gw, standby
+
+
+def test_relay_so_funciona_com_lista_de_destinos_e_cliente(tmp_path):
+    relay, *_ = _relay(tmp_path, [], allow=())
+    assert not relay.enabled and relay.step() == 0
+    sem_cliente = wb.Relay(relay.cfg, relay.spool, None)
+    assert not sem_cliente.enabled
+
+
+def test_relay_nao_consulta_fora_da_janela(tmp_path):
+    relay, _, _, standby = _relay(tmp_path, [_item()])
+    relay.poll_until = 0.0
+    assert relay.step() == 0 and standby.chamadas == []
+
+
+def test_entrega_na_janela_envia_ao_destino_permitido_e_confirma(tmp_path):
+    relay, spool, gw, standby = _relay(tmp_path, [_item()])
+    assert relay.step() == 1
+    assert gw.enviados == [(SESSAO, f"{PERMITIDO}@c.us", "Oi! Sou a Lia.")]
+    metodos = [(m, u.rsplit("/v1/", 1)[1]) for m, u, _, _ in standby.chamadas]
+    assert metodos == [("GET", "connector/outbox"), ("POST", "connector/outbox/41/ack")]
+    ack = json.loads(standby.chamadas[1][2])
+    assert ack == {"status": "sent", "provider_message_id": "WA-1", "error": None}
+    assert spool.relayed_get(41) == ("sent", "WA-1", None)
+
+
+def test_destino_fora_da_lista_nao_e_enviado_e_o_standby_fica_sabendo(tmp_path):
+    relay, spool, gw, standby = _relay(tmp_path, [_item(phone="5511999990000")])
+    relay.step()
+    assert gw.enviados == []
+    assert json.loads(standby.chamadas[1][2]) == {"status": "failed", "provider_message_id": None, "error": "destino_fora_da_lista"}
+
+
+def test_instancia_nao_mapeada_e_texto_vazio_nao_sao_enviados(tmp_path):
+    relay, _, gw, standby = _relay(tmp_path, [_item(id=1, instance="outra"), _item(id=2, text="   ")])
+    relay.step()
+    assert gw.enviados == []
+    erros = [json.loads(c[2])["error"] for c in standby.chamadas if c[0] == "POST"]
+    assert erros == ["instancia_nao_mapeada", "sem_texto"]
+
+
+def test_falha_de_rede_no_envio_nao_registra_e_tenta_no_proximo_ciclo(tmp_path):
+    gw = GatewayFalso(("retry", None, "URLError"), ("sent", "WA-9", None))
+    relay, spool, _, standby = _relay(tmp_path, [_item()], gateway=gw)
+    relay.step()
+    assert spool.relayed_get(41) is None and [c[0] for c in standby.chamadas] == ["GET"]  # sem ack
+    relay.step()
+    assert spool.relayed_get(41) == ("sent", "WA-9", None) and len(gw.enviados) == 2
+
+
+def test_ack_que_falha_nao_reenvia_a_mensagem(tmp_path):
+    relay, spool, gw, standby = _relay(tmp_path, [_item()], ack_code=OSError("rede"))
+    relay.step()
+    assert len(gw.enviados) == 1 and spool.relayed_get(41) == ("sent", "WA-1", None)
+    standby.ack_code = 200
+    relay.step()
+    assert len(gw.enviados) == 1  # so repete o ack, nunca o envio
+    assert [c[0] for c in standby.chamadas].count("POST") == 2
+
+
+def test_ack_404_encerra_sem_reenviar(tmp_path):
+    relay, _, gw, standby = _relay(tmp_path, [_item()], ack_code=404)
+    relay.step()
+    relay.step()
+    assert len(gw.enviados) == 1
+
+
+def test_entrega_de_mensagem_arma_a_janela_de_consulta(tmp_path):
+    relay, spool, _, _ = _relay(tmp_path, [])
+    relay.poll_until = 0.0
+    spool.put("e1", "{}")
+    wb.deliver_due(spool, relay.cfg, post=lambda *a: 202, on_delivered=relay.arm)
+    assert relay.poll_until > time.time() + relay.cfg.relay_window_s - 5
+
+
+def _gateway_http(codigo, corpo):
+    visto = {}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            visto["corpo"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            visto["chave"] = self.headers["X-API-Key"]
+            raw = json.dumps(corpo).encode()
+            self.send_response(codigo)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    srv = _servidor(H)
+    return srv, visto
+
+
+def test_cliente_do_gateway_envia_texto_e_classifica_as_falhas():
+    srv, visto = _gateway_http(201, {"messageId": "WA-77"})
+    try:
+        c = wb.OpenWAClient(f"http://127.0.0.1:{srv.server_address[1]}", "chave-do-gateway")
+        assert c.send_text(SESSAO, f"{PERMITIDO}@c.us", "Oi") == ("sent", "WA-77", None)
+        assert visto["corpo"] == {"chatId": f"{PERMITIDO}@c.us", "text": "Oi"} and visto["chave"] == "chave-do-gateway"
+    finally:
+        srv.shutdown()
+    for codigo, esperado in ((400, "failed"), (500, "retry")):
+        srv, _ = _gateway_http(codigo, {"message": "x"})
+        try:
+            c = wb.OpenWAClient(f"http://127.0.0.1:{srv.server_address[1]}", "k")
+            assert c.send_text(SESSAO, "x@c.us", "Oi")[0] == esperado
+        finally:
+            srv.shutdown()
+    fechado = wb.OpenWAClient("http://127.0.0.1:1", "k", timeout=0.2)
+    assert fechado.send_text(SESSAO, "x@c.us", "Oi")[0] == "retry"
+
+
+def test_config_le_a_lista_de_destinos_e_a_base_da_saida():
+    cfg = wb.Config.from_env({"SEND_ALLOWLIST": "+55 (11) 90000-1111, 5511911112222", "OUT_URL": "https://standby.exemplo.test/webhook/connector", "OPENWA_SESSION_MAP": "s1:inst"})
+    assert cfg.send_allowlist == ["5511900001111", "5511911112222"]
+    assert cfg.relay_base == "https://standby.exemplo.test" and cfg.instance_sessions == {"inst": "s1"}
+    assert wb.Config.from_env({}).send_allowlist == [] and wb.Config.from_env({}).relay_base == ""

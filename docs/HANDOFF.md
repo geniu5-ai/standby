@@ -18,6 +18,8 @@ bloco de estado mais novo divergir de um texto mais antigo, vale o bloco.
 
 > **🧭 QStash (11/nov/2026):** rota `POST /v1/control/qstash-wake` (assinatura da Upstash), `app/qstash_auth.py` e `scripts/qstash_schedule.py` entraram para acordar o worker no lugar do relógio do Actions; o `wake.yml` fica como reserva. Estado da ativação (variáveis do Render, deploy, schedule) e a conta de horas do Render free: [`WAKE.md`](WAKE.md), seção "Wake pelo QStash".
 
+> **🧭 Saída pelo conector (11/nov/2026):** `GET /v1/connector/outbox` e `POST /v1/connector/outbox/{id}/ack` (segredo do conector) deixam o `wa-bridge` entregar pelo OpenWA as respostas gravadas da instância de teste, **sem sair do `record_only`**. Destinos só da lista `SEND_ALLOWLIST`; instâncias só de `CONNECTOR_RELAY_INSTANCES`. Não é o `live` (trava 1).
+
 > **🧭 Documentação da pesquisa (11/nov/2026):** [`GATEWAYS-WHATSAPP.md`](GATEWAYS-WHATSAPP.md) (gateways, laboratório na VPS 003, conector), [`MONITORAMENTO.md`](MONITORAMENTO.md) (Better Stack e vigias fora da Oracle) e [`DECISOES-INFRA.md`](DECISOES-INFRA.md) (serverless, orquestração e continuidade). Ponto de atenção: o conector na 003 foi baixado do GitHub como arquivo único, exceção à regra de não copiar o repositório para VPS, a confirmar pelo chairman.
 
 > **🧭 Conector OpenWA (11/nov/2026):** rota `POST /webhook/connector` (segredo próprio `CONNECTOR_HMAC_SECRET`, não o `HMAC_SECRET` da Evolution) e `connectors/wa-bridge/` (stdlib, roda ao lado do gateway, resolve LID em telefone, fila SQLite). Entrega ao fluxo comum como `evolution`, só ingestão em `record_only`: nada sai ao WhatsApp. Laboratório na VPS 003 (Quadlet `lab-*`); detalhes no README do conector.

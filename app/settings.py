@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # Conector externo (OpenWA, waxum; connectors/wa-bridge): segredo PROPRIO da rota
     # /webhook/connector. Nunca cai para HMAC_SECRET (Evolution): sem ele a rota responde 503.
     CONNECTOR_HMAC_SECRET: SecretStr | None = None
+    # Saida pelo conector SEM sair do record_only: instancias (separadas por virgula) cujas respostas
+    # gravadas o conector pode buscar em /v1/connector/outbox e entregar pelo gateway. Vazia = nada
+    # sai. Cada resposta so vale ate CONNECTOR_RELAY_MAX_AGE_SECONDS depois de criada.
+    CONNECTOR_RELAY_INSTANCES: str = ""
+    CONNECTOR_RELAY_MAX_AGE_SECONDS: int = Field(default=900, ge=60, le=3600)
     ZERNIO_API_KEY: SecretStr | None = None
     ZERNIO_API_URL: str = "https://zernio.com/api"
     # Instancia Evolution existente usada so como contingencia do aviso de

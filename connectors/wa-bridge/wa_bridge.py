@@ -13,6 +13,13 @@ O que ele faz, na ordem:
      (``CONNECTOR_HMAC_SECRET``, nunca o ``HMAC_SECRET`` da Evolution), com retentativas
      (o Render free leva ~60 s para acordar) e fila de mortos.
 
+Saida (resposta de volta ao WhatsApp), sem o Standby sair do ``record_only``:
+  7. depois de entregar uma mensagem, o conector consulta o Standby por alguns minutos
+     (``GET /v1/connector/outbox``, assinado) pelas respostas ja gravadas da instancia;
+  8. envia cada uma pelo gateway, SO para destinos da lista local ``SEND_ALLOWLIST`` (vazia =
+     nao envia nada), registra localmente (nunca envia duas vezes) e confirma no Standby (``ack``).
+Fora dessa janela ele nao consulta: nao mantem o Render acordado.
+
 Sem ``OUT_URL`` ele roda em modo seco: grava o envelope em ``out.jsonl`` e nao envia nada.
 Configuracao so por ambiente (ver README). Nunca loga corpo de mensagem nem segredo.
 """
@@ -34,6 +41,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import urlsplit
 
 log = logging.getLogger("wa_bridge")
 
@@ -160,6 +168,26 @@ class OpenWAClient:
         return phone or None
 
 
+    def send_text(self, session_id: str, chat_id: str, text: str) -> tuple[str, str | None, str | None]:
+        """Envia texto pelo gateway. ('sent', id, None) | ('failed', None, motivo) | ('retry', None, motivo).
+
+        'retry' = falha de rede ou 5xx: nada foi registrado, tenta no proximo ciclo da janela.
+        """
+        url = f"{self.base_url}/api/sessions/{urllib.parse.quote(session_id)}/messages/send-text"
+        body = json.dumps({"chatId": chat_id, "text": text}).encode()
+        req = urllib.request.Request(
+            url, data=body, method="POST", headers={"X-API-Key": self.api_key, "Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout * 3) as resp:
+                data = json.loads(resp.read().decode() or "{}")
+                return "sent", str(data.get("messageId") or data.get("id") or "")[:256] or None, None
+        except urllib.error.HTTPError as exc:
+            return ("retry" if exc.code >= 500 else "failed"), None, f"gateway_http_{exc.code}"
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            return "retry", None, type(exc).__name__
+
+
 # --- fila (SQLite) ----------------------------------------------------------------------------
 
 
@@ -174,6 +202,10 @@ class Spool:
             "id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT UNIQUE NOT NULL, body TEXT NOT NULL, "
             "state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL, "
             "last_status INTEGER, last_error TEXT, created_at REAL NOT NULL, done_at REAL)"
+        )
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS relayed (outbox_id INTEGER PRIMARY KEY, status TEXT NOT NULL, "
+            "provider_message_id TEXT, error TEXT, acked INTEGER NOT NULL DEFAULT 0, at REAL NOT NULL)"
         )
 
     def put(self, event_id: str, body: str, now: float | None = None) -> bool:
@@ -211,6 +243,24 @@ class Spool:
                 "UPDATE outbox SET attempts=attempts+1, last_status=?, last_error=?, next_at=? WHERE id=?",
                 (status, error, next_at, row_id),
             )
+
+    def relayed_get(self, outbox_id: int) -> tuple[str, str | None, str | None] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT status, provider_message_id, error FROM relayed WHERE outbox_id=?", (outbox_id,)
+            ).fetchone()
+        return (row[0], row[1], row[2]) if row else None
+
+    def relayed_put(self, outbox_id: int, status: str, provider_message_id: str | None, error: str | None) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR IGNORE INTO relayed (outbox_id, status, provider_message_id, error, at) VALUES (?, ?, ?, ?, ?)",
+                (outbox_id, status, provider_message_id, error, time.time()),
+            )
+
+    def relayed_acked(self, outbox_id: int) -> None:
+        with self._lock:
+            self._db.execute("UPDATE relayed SET acked=1 WHERE outbox_id=?", (outbox_id,))
 
     def stats(self) -> dict[str, int]:
         with self._lock:
@@ -254,6 +304,18 @@ class Config:
     out_secret: str = ""
     out_timeout: float = 90.0
     data_dir: str = "/data"
+    send_allowlist: list[str] = field(default_factory=list)  # so digitos; vazia = nao envia nada
+    relay_window_s: float = 300.0
+    relay_every_s: float = 4.0
+
+    @property
+    def relay_base(self) -> str:
+        parts = urlsplit(self.out_url)
+        return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
+
+    @property
+    def instance_sessions(self) -> dict[str, str]:
+        return {instance: session_id for session_id, instance in self.sessions.items()}
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
@@ -275,6 +337,9 @@ class Config:
             out_secret=env.get("OUT_SECRET", ""),
             out_timeout=float(env.get("OUT_TIMEOUT", "90")),
             data_dir=env.get("DATA_DIR", "/data"),
+            send_allowlist=[d for d in (digits(x) for x in env.get("SEND_ALLOWLIST", "").split(",")) if d],
+            relay_window_s=float(env.get("RELAY_WINDOW_S", "300")),
+            relay_every_s=float(env.get("RELAY_EVERY_S", "4")),
         )
 
 
@@ -284,6 +349,7 @@ def deliver_due(
     *,
     now: float | None = None,
     post: Callable[[str, bytes, dict[str, str], float], int] = http_post,
+    on_delivered: Callable[[float], None] | None = None,
 ) -> int:
     """Entrega o que esta vencido. Devolve quantos itens processou. Modo seco sem ``out_url``."""
     now = time.time() if now is None else now
@@ -310,6 +376,8 @@ def deliver_due(
         decisao = classify(status)
         if decisao == "done":
             spool.finish(row_id, "done", status, None, now)
+            if on_delivered is not None:
+                on_delivered(time.time())
         elif decisao == "dead" or attempts + 1 >= MAX_ATTEMPTS:
             spool.finish(row_id, "dead", status, erro, now)
             log.error("evento %s descartado (status=%s erro=%s)", event_id[:12], status, erro)
@@ -318,6 +386,101 @@ def deliver_due(
             spool.retry(row_id, status, erro, now + espera)
             log.warning("evento %s: nova tentativa em %ss (status=%s erro=%s)", event_id[:12], espera, status, erro)
     return feitos
+
+
+def http_json(method: str, url: str, body: bytes | None, headers: dict[str, str], timeout: float) -> tuple[int, bytes]:
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read(1_000_000)
+    except urllib.error.HTTPError as exc:
+        return exc.code, b""
+
+
+class Relay:
+    """Entrega as respostas gravadas do Standby pelo gateway, numa janela curta depois de cada entrada."""
+
+    def __init__(
+        self,
+        cfg: Config,
+        spool: Spool,
+        client: OpenWAClient | None,
+        request: Callable[[str, str, bytes | None, dict[str, str], float], tuple[int, bytes]] = http_json,
+    ) -> None:
+        self.cfg, self.spool, self.client, self._request = cfg, spool, client, request
+        self.poll_until = 0.0
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.cfg.out_url and self.cfg.send_allowlist and self.cfg.sessions and self.client)
+
+    def arm(self, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        self.poll_until = max(self.poll_until, now + self.cfg.relay_window_s)
+
+    def _signed(self, body: bytes, now: float) -> dict[str, str]:
+        ts = str(int(now))
+        return {
+            "Content-Type": "application/json",
+            TIMESTAMP_HEADER: ts,
+            SIGNATURE_HEADER: sign_out(self.cfg.out_secret, body, ts),
+        }
+
+    def step(self, now: float | None = None) -> int:
+        """Um ciclo: busca, envia (so a destinos permitidos) e confirma. Devolve quantos itens tratou."""
+        now = time.time() if now is None else now
+        if not self.enabled or now >= self.poll_until:
+            return 0
+        base = self.cfg.relay_base
+        try:
+            status, raw = self._request("GET", f"{base}/v1/connector/outbox", None, self._signed(b"", now), self.cfg.out_timeout)
+            if status != 200:
+                log.warning("consulta da saida: HTTP %s", status)
+                return 0
+            items = json.loads(raw).get("items", [])
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            log.warning("consulta da saida falhou (%s)", type(exc).__name__)
+            return 0
+        tratados = 0
+        for item in items:
+            tratados += 1
+            self._deliver(item, now)
+        return tratados
+
+    def _deliver(self, item: dict[str, Any], now: float) -> None:
+        outbox_id = int(item["id"])
+        prior = self.spool.relayed_get(outbox_id)
+        if prior is None:
+            phone = digits(str(item.get("destination_jid", "")).split("@", 1)[0])
+            session_id = self.cfg.instance_sessions.get(str(item.get("instance")))
+            text = str(item.get("text") or "")
+            if session_id is None:
+                outcome: tuple[str, str | None, str | None] = ("failed", None, "instancia_nao_mapeada")
+            elif phone not in self.cfg.send_allowlist:
+                outcome = ("failed", None, "destino_fora_da_lista")
+            elif not text.strip():
+                outcome = ("failed", None, "sem_texto")
+            else:
+                assert self.client is not None
+                outcome = self.client.send_text(session_id, f"{phone}@c.us", text)
+                if outcome[0] == "retry":  # nada registrado: o proximo ciclo da janela tenta de novo
+                    log.warning("envio %s adiado (%s)", outbox_id, outcome[2])
+                    return
+            self.spool.relayed_put(outbox_id, *outcome)
+            prior = outcome
+        status, provider_message_id, error = prior
+        body = json.dumps(
+            {"status": "sent" if status == "sent" else "failed", "provider_message_id": provider_message_id, "error": error},
+            separators=(",", ":"),
+        ).encode()
+        try:
+            code, _ = self._request("POST", f"{self.cfg.relay_base}/v1/connector/outbox/{outbox_id}/ack", body, self._signed(body, now), self.cfg.out_timeout)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            log.warning("ack %s falhou (%s); sera repetido sem reenviar", outbox_id, type(exc).__name__)
+            return
+        if code in (200, 404):  # 404: a linha ja nao e elegivel (ja anotada); nada mais a fazer
+            self.spool.relayed_acked(outbox_id)
+        log.info("resposta %s: %s (ack HTTP %s)", outbox_id, status, code)
 
 
 # --- servidor ---------------------------------------------------------------------------------
@@ -376,10 +539,15 @@ def make_handler(cfg: Config, spool: Spool, client: OpenWAClient | None) -> type
     return Handler
 
 
-def worker_loop(spool: Spool, cfg: Config, stop: threading.Event) -> None:
+def worker_loop(spool: Spool, cfg: Config, stop: threading.Event, relay: Relay | None = None) -> None:
+    ultimo_relay = 0.0
     while not stop.is_set():
         try:
-            if not deliver_due(spool, cfg):
+            trabalho = deliver_due(spool, cfg, on_delivered=relay.arm if relay else None)
+            if relay is not None and time.time() - ultimo_relay >= cfg.relay_every_s:
+                ultimo_relay = time.time()
+                trabalho += relay.step()
+            if not trabalho:
                 stop.wait(1.0)
         except Exception:  # o worker nunca morre por um item ruim
             log.exception("falha inesperada no worker")
@@ -397,10 +565,14 @@ def main() -> None:
     spool = Spool(os.path.join(cfg.data_dir, "spool.sqlite"))
     client = OpenWAClient(cfg.openwa_api_url, cfg.openwa_api_key) if cfg.openwa_api_url else None
     stop = threading.Event()
-    threading.Thread(target=worker_loop, args=(spool, cfg, stop), daemon=True).start()
+    relay = Relay(cfg, spool, client)
+    if relay.enabled:
+        relay.arm(time.time() - cfg.relay_window_s + 60)  # janela curta ao subir, caso haja resposta pendente
+    threading.Thread(target=worker_loop, args=(spool, cfg, stop, relay), daemon=True).start()
     server = ThreadingHTTPServer((cfg.listen_host, cfg.listen_port), make_handler(cfg, spool, client))
-    log.info("wa-bridge no ar em %s:%s (%s, %d sessao(oes) mapeada(s))", cfg.listen_host, cfg.listen_port,
-             "enviando" if cfg.out_url else "modo seco", len(cfg.sessions))
+    log.info("wa-bridge no ar em %s:%s (%s, %d sessao(oes) mapeada(s), saida %s)", cfg.listen_host, cfg.listen_port,
+             "enviando" if cfg.out_url else "modo seco", len(cfg.sessions),
+             f"ligada para {len(cfg.send_allowlist)} destino(s)" if relay.enabled else "desligada")
     try:
         server.serve_forever()
     finally:

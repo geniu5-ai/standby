@@ -31,3 +31,13 @@ class ConnectorEnvelope(BaseModel):
     source: Literal["openwa", "waxum"]
     event_id: str = Field(min_length=1, max_length=256)
     evolution: dict[str, Any]
+
+
+class RelayAck(BaseModel):
+    """Confirmacao do conector de que entregou (ou falhou ao entregar) uma resposta gravada."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    status: Literal["sent", "failed"]
+    provider_message_id: str | None = Field(default=None, max_length=256)
+    error: str | None = Field(default=None, max_length=200)
