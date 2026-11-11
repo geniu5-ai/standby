@@ -52,10 +52,13 @@ TURN_PRIORITY_FOLLOWUP = 0
 
 # fila -> (concorrencia, segundos entre consultas ao banco). Job agendado so acorda na consulta,
 # entao a fila do turno consulta a cada 1 s (o debounce de 8 s depende disso).
+# Neon free: qualquer consulta reinicia o timer de 5 min para suspender o compute, e o plano grátis
+# tem 100 CU-h/mês. Por isso o polling é lento: a fila acorda por NOTIFY (conexão direta, sem -pooler);
+# o polling é só a rede de segurança. Não baixe estes números sem refazer a conta de CU-h.
 WORKERS: dict[str, tuple[int, float]] = {
-    TURN_QUEUE: (16, 1.0),
-    AUX_QUEUE: (6, 2.0),
-    CRON_QUEUE: (2, 5.0),
+    TURN_QUEUE: (16, 5.0),
+    AUX_QUEUE: (6, 30.0),
+    CRON_QUEUE: (2, 60.0),
 }
 JOBS_RETENTION_HOURS = 7 * 24
 # Tarefas que seguram uma cadeia (follow-up, envio, Manager): uma falha de banco ou de rede por um
@@ -81,6 +84,10 @@ TASK_MODULES = [
 
 def _conninfo() -> str:
     url = make_url(get_settings().DATABASE_URL).set(drivername="postgresql")
+    # Neon: o host -pooler (PgBouncer) não entrega LISTEN/NOTIFY. Conexão direta = mesmo banco.
+    host = url.host or ""
+    if "-pooler." in host:
+        url = url.set(host=host.replace("-pooler.", ".", 1))
     return url.render_as_string(hide_password=False)
 
 
@@ -144,7 +151,7 @@ async def limpa_jobs_antigos(context: procrastinate.JobContext, timestamp: int) 
     await builtin_tasks.remove_old_jobs(context, max_hours=JOBS_RETENTION_HOURS)
 
 
-@jobs.periodic(cron="* * * * *")
+@jobs.periodic(cron="*/10 * * * *")
 @jobs.task(name="reenfileira_travados", queue=CRON_QUEUE)
 async def reenfileira_travados(timestamp: int) -> None:
     """Job ``doing`` de worker que morreu (deploy, kill -9) volta para a fila.
