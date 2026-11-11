@@ -18,6 +18,8 @@ catálogo, preço, conversa ou telefone em nenhum destes arquivos (`TRAPS` #20).
 |---|---|---|
 | [`OPERACAO.md`](OPERACAO.md) | onde está (Render, Neon), variáveis, segredos, cofre, roles, como testar, wake, backup, pendências | canônico |
 | [`WAKE.md`](WAKE.md) | por que o worker dorme no Render free, como o Actions o acorda, alternativas avaliadas, próximos passos (failover) | canônico |
+| [`MONITORAMENTO.md`](MONITORAMENTO.md) | o que vigia o quê fora da Oracle: Better Stack (monitores, heartbeats, página de status, limites do plano grátis), QStash, ferramentas avaliadas | canônico |
+| [`GATEWAYS-WHATSAPP.md`](GATEWAYS-WHATSAPP.md) | gateways de WhatsApp: comparação, laboratório na VPS 003, resultados medidos, formato dos webhooks, o conector `wa-bridge` e como operar | canônico |
 | [`TRAPS.md`](TRAPS.md) | armadilhas já encontradas (sintoma, causa, correção, regra); numeração própria, citada em todo lugar: **não renumerar** | canônico |
 
 ## Relação com o Genius Next
@@ -30,6 +32,7 @@ catálogo, preço, conversa ou telefone em nenhum destes arquivos (`TRAPS` #20).
 
 | Documento | Para quê | Situação |
 |---|---|---|
+| [`DECISOES-INFRA.md`](DECISOES-INFRA.md) | serverless × VPS × contêineres, Cloudflare, orquestração (Procrastinate, Inngest, Hatchet, DBOS, Absurd), modelos de linguagem, continuidade e falhas correlacionadas, com o que não foi verificado | histórico (decisão registrada em 11/nov/2026) |
 | [`COFRE-IDEIAS.md`](COFRE-IDEIAS.md) | as seis ideias do cofre de segredos (todas feitas), decisões e alternativas avaliadas | histórico (decisão registrada; o uso atual está em `OPERACAO.md`, "Cofre") |
 | [`GENIUS-DEV-AGENTS.md`](GENIUS-DEV-AGENTS.md) | cópia das regras da casa do Genius Dev (fonte: `Genius-Dev/AGENTS.md`, VPS 003). Não editar; onde divergir do `AGENTS.md` daqui, vale o daqui | referência (cópia) |
 
