@@ -18,6 +18,8 @@ bloco de estado mais novo divergir de um texto mais antigo, vale o bloco.
 
 > **🧭 QStash (11/nov/2026):** rota `POST /v1/control/qstash-wake` (assinatura da Upstash), `app/qstash_auth.py` e `scripts/qstash_schedule.py` entraram para acordar o worker no lugar do relógio do Actions; o `wake.yml` fica como reserva. Estado da ativação (variáveis do Render, deploy, schedule) e a conta de horas do Render free: [`WAKE.md`](WAKE.md), seção "Wake pelo QStash".
 
+> **🧭 Conector OpenWA (11/nov/2026):** rota `POST /webhook/connector` (segredo próprio `CONNECTOR_HMAC_SECRET`, não o `HMAC_SECRET` da Evolution) e `connectors/wa-bridge/` (stdlib, roda ao lado do gateway, resolve LID em telefone, fila SQLite). Entrega ao fluxo comum como `evolution`, só ingestão em `record_only`: nada sai ao WhatsApp. Laboratório na VPS 003 (Quadlet `lab-*`); detalhes no README do conector.
+
 > **🧭 Paridade com o Next (03/nov/2026, tarde):** o canônico agora é [`PARIDADE.md`](PARIDADE.md) (regra, matriz igual × separado, medição por hash, registro de espelhamentos). Em resumo:
 > - **Regra (ordem do chairman):** tudo o que muda no Next é espelhado aqui na mesma entrega (`AGENTS.md`). Repositório público: só código, testes sem dado real, regras e armadilhas genéricas (`TRAPS` #20). O Standby só existe no container local e no GitHub, nunca numa VPS.
 > - **Código:** 106 dos 119 arquivos de `app/` do Next são idênticos aos daqui; quatro diferem (`app/main.py`, `app/observability.py`, `app/status/audit.py`, `app/webapp/router.py`) e ainda não foram analisados. O patch do follow-up e o do Manager já estão espelhados neste PR; merge junto com o PR do Next (`Genius-Next#74`).

@@ -197,3 +197,12 @@ que a corrige. As do Next que também valem aqui estão citadas pelo número del
 **Correção:** `QStash(token, base_url=url)` em `scripts/qstash_schedule.py`.
 
 **Regra:** conferir a assinatura do SDK instalado antes de colar um snippet de console. O `url` do `Receiver` é comparado com o `sub` do JWT, que é o **destino do schedule**; configure `QSTASH_WAKE_URL` com a URL pública exata (`https://genius-next-serverless.onrender.com/v1/control/qstash-wake`), não a que o app enxerga atrás do proxy.
+
+### 23. O OpenWA entrega o remetente como LID, não como telefone
+**Data:** 11/nov/2026 | **Impacto:** `data.from` e `data.chatId` do webhook `message.received` vêm como `...@lid` (identificador privado do WhatsApp, `isLidSender: true`). O app indexa conversa, cliente e allowlist por telefone (`remoteJid` com `@s.whatsapp.net`); entregar o LID como está criaria um cliente novo por LID e nunca casaria com o cadastro.
+
+**Causa:** o WhatsApp passou a usar LID para parte dos contatos; o OpenWA repassa o que recebe e só traz o `pushName` no evento.
+
+**Correção:** o conector (`connectors/wa-bridge/`) resolve o LID por `GET /api/sessions/{id}/contacts/{lid}/phone` do próprio OpenWA (existe também `GET /contacts/{número}/lid`) e só então monta o `remoteJid`. LID sem resolução é ignorado, nunca entregue.
+
+**Regra:** nenhum adaptador de gateway entrega identificador que não seja telefone ao app. Conferido em teste real (10/11/2026, OpenWA 0.30.0, motor Baileys).

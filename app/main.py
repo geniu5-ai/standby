@@ -37,6 +37,7 @@ from app.hmac_auth import (
     verify_zernio_signature,
 )
 from app.identity import build_trusted_ingress
+from app.ingress.connector import SIGNATURE_HEADER, TIMESTAMP_HEADER, ConnectorEnvelope
 from app.ingress.zernio import (
     SUPPORTED_EVENTS as ZERNIO_SUPPORTED_EVENTS,
     ZernioEventIgnored,
@@ -445,6 +446,68 @@ async def _accept_ingress_unspanned(
         "workflow_id": trusted.ingest_workflow_id,
         "conversation_id": trusted.conversation_id,
     }
+
+
+@app.post("/webhook/connector", status_code=status.HTTP_202_ACCEPTED)
+async def connector_webhook(request: Request) -> dict[str, str]:
+    started = time.perf_counter()
+    try:
+        return await _process_connector_webhook(request)
+    finally:
+        WEBHOOK_LATENCY.observe(time.perf_counter() - started)
+
+
+async def _process_connector_webhook(request: Request) -> dict[str, str]:
+    """Conector externo (OpenWA, waxum): envelope assinado com segredo PROPRIO, depois o fluxo comum.
+
+    A assinatura (``timestamp.corpo``, janela de ``CONTROL_HMAC_MAX_AGE_SECONDS``) usa
+    ``CONNECTOR_HMAC_SECRET``; o ``HMAC_SECRET`` da Evolution nao autentica aqui e este segredo nao
+    autentica na rota da Evolution. O evento vai ao fluxo comum como ``evolution`` (o contrato
+    confiavel e o da Evolution), e o tenant vem do registro, nunca do envelope.
+    """
+    runtime_settings = get_settings()
+    secret_setting = runtime_settings.CONNECTOR_HMAC_SECRET
+    secret = secret_setting.get_secret_value() if secret_setting is not None else ""
+    if not secret:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    body = await _read_limited_body(
+        request, max_bytes=runtime_settings.WEBHOOK_MAX_BODY_BYTES
+    )
+    if not verify_control_signature(
+        body,
+        request.headers.get(TIMESTAMP_HEADER),
+        request.headers.get(SIGNATURE_HEADER),
+        secret,
+        max_age_seconds=runtime_settings.CONTROL_HMAC_MAX_AGE_SECONDS,
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+    try:
+        envelope = ConnectorEnvelope.model_validate(payload)
+        webhook = EvolutionWebhook.model_validate(envelope.evolution)
+    except ValidationError as exc:
+        logging.getLogger(__name__).warning(
+            "connector webhook rejected (422): %s",
+            [
+                (".".join(map(str, error["loc"])), error["type"])
+                for error in exc.errors(include_input=False, include_url=False)
+            ],
+        )
+        raise HTTPException(status_code=422, detail="Invalid webhook") from exc
+
+    # geniusMedia e so do Zernio: vindo de fora, e descartado antes de qualquer uso.
+    if webhook.data.genius_media is not None:
+        webhook = webhook.model_copy(
+            update={"data": webhook.data.model_copy(update={"genius_media": None})}
+        )
+
+    return await _accept_ingress(
+        webhook, provider="evolution", runtime_settings=runtime_settings
+    )
 
 
 @app.post("/webhook/zernio", status_code=status.HTTP_202_ACCEPTED)
