@@ -188,6 +188,72 @@ class OpenWAClient:
             return "retry", None, type(exc).__name__
 
 
+    def send_state(self, session_id: str, chat_id: str, state: str) -> bool:
+        """Mostra ('typing') ou apaga ('paused') o indicador de digitacao. Best effort: nunca levanta."""
+        url = f"{self.base_url}/api/sessions/{urllib.parse.quote(session_id)}/chats/typing"
+        body = json.dumps({"chatId": chat_id, "state": state}).encode()
+        req = urllib.request.Request(
+            url, data=body, method="POST", headers={"X-API-Key": self.api_key, "Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5):
+                return True
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            log.debug("indicador de digitacao (%s) falhou (%s)", state, type(exc).__name__)
+            return False
+
+
+class Typist:
+    """Indicador 'digitando...' por conversa. ``arm`` na entrada; ``step`` no worker; ``stop`` quando a resposta sai."""
+
+    def __init__(self, cfg: Config, client: OpenWAClient | None, sender: Callable[[str, str, str], Any] | None = None) -> None:
+        self.cfg = cfg
+        self._sender = sender or (client.send_state if client else (lambda *_: False))
+        self._jobs: dict[tuple[str, str], dict[str, float]] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.cfg.typing_enabled and self.cfg.sessions and self.cfg.send_allowlist)
+
+    def _allowed(self, session_id: str, chat_id: str) -> bool:
+        return session_id in self.cfg.sessions and digits(chat_id.split("@", 1)[0]) in self.cfg.send_allowlist
+
+    def arm(self, session_id: str, chat_id: str, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        if not self.enabled or not self._allowed(session_id, chat_id):
+            return
+        with self._lock:
+            job = self._jobs.get((session_id, chat_id))
+            if job is not None:  # nova mensagem na mesma conversa: estende o prazo, nao reinicia
+                job["until"] = max(job["until"], now + self.cfg.typing_max_s)
+                return
+            inicio = now + self.cfg.typing_pre_delay_s
+            self._jobs[(session_id, chat_id)] = {"next": inicio, "until": now + self.cfg.typing_max_s, "started": 0.0}
+
+    def stop(self, session_id: str, chat_id: str) -> None:
+        with self._lock:
+            job = self._jobs.pop((session_id, chat_id), None)
+        if job is not None and job["started"]:
+            self._sender(session_id, chat_id, "paused")
+
+    def step(self, now: float | None = None) -> int:
+        now = time.time() if now is None else now
+        acoes: list[tuple[str, str, str]] = []
+        with self._lock:
+            for (session_id, chat_id), job in list(self._jobs.items()):
+                if now >= job["until"]:
+                    del self._jobs[(session_id, chat_id)]
+                    acoes.append((session_id, chat_id, "paused"))
+                elif now >= job["next"]:
+                    job["next"] = now + self.cfg.typing_refresh_s
+                    job["started"] = now
+                    acoes.append((session_id, chat_id, "typing"))
+        for session_id, chat_id, state in acoes:  # fora do lock: chamada de rede
+            self._sender(session_id, chat_id, state)
+        return len(acoes)
+
+
 # --- fila (SQLite) ----------------------------------------------------------------------------
 
 
@@ -307,6 +373,13 @@ class Config:
     send_allowlist: list[str] = field(default_factory=list)  # so digitos; vazia = nao envia nada
     relay_window_s: float = 300.0
     relay_every_s: float = 4.0
+    # "digitando..." para a pessoa, como o Next: comeca TYPING_PRE_DELAY_S depois da entrada e se renova
+    # ate a resposta sair (ou TYPING_MAX_S). So para destinos de SEND_ALLOWLIST: nunca mostra digitando
+    # para quem nao vai receber resposta.
+    typing_enabled: bool = True
+    typing_pre_delay_s: float = 5.0
+    typing_refresh_s: float = 4.0
+    typing_max_s: float = 60.0
 
     @property
     def relay_base(self) -> str:
@@ -340,6 +413,10 @@ class Config:
             send_allowlist=[d for d in (digits(x) for x in env.get("SEND_ALLOWLIST", "").split(",")) if d],
             relay_window_s=float(env.get("RELAY_WINDOW_S", "300")),
             relay_every_s=float(env.get("RELAY_EVERY_S", "4")),
+            typing_enabled=env.get("TYPING_ENABLED", "1").strip() not in ("0", "false", "no", ""),
+            typing_pre_delay_s=float(env.get("TYPING_PRE_DELAY_S", "5")),
+            typing_refresh_s=float(env.get("TYPING_REFRESH_S", "4")),
+            typing_max_s=float(env.get("TYPING_MAX_S", "60")),
         )
 
 
@@ -406,8 +483,10 @@ class Relay:
         spool: Spool,
         client: OpenWAClient | None,
         request: Callable[[str, str, bytes | None, dict[str, str], float], tuple[int, bytes]] = http_json,
+        typist: Typist | None = None,
     ) -> None:
         self.cfg, self.spool, self.client, self._request = cfg, spool, client, request
+        self.typist = typist
         self.poll_until = 0.0
 
     @property
@@ -466,6 +545,8 @@ class Relay:
                 if outcome[0] == "retry":  # nada registrado: o proximo ciclo da janela tenta de novo
                     log.warning("envio %s adiado (%s)", outbox_id, outcome[2])
                     return
+            if self.typist is not None and session_id is not None and phone:
+                self.typist.stop(session_id, f"{phone}@c.us")  # resposta saiu (ou falhou de vez): apaga digitando
             self.spool.relayed_put(outbox_id, *outcome)
             prior = outcome
         status, provider_message_id, error = prior
@@ -486,7 +567,7 @@ class Relay:
 # --- servidor ---------------------------------------------------------------------------------
 
 
-def make_handler(cfg: Config, spool: Spool, client: OpenWAClient | None) -> type[BaseHTTPRequestHandler]:
+def make_handler(cfg: Config, spool: Spool, client: OpenWAClient | None, typist: Typist | None = None) -> type[BaseHTTPRequestHandler]:
     resolve = (lambda sid, lid: client.phone_of(sid, lid)) if client else (lambda sid, lid: None)
 
     class Handler(BaseHTTPRequestHandler):
@@ -534,16 +615,23 @@ def make_handler(cfg: Config, spool: Spool, client: OpenWAClient | None) -> type
                 self._reply(400, {"error": "invalid_payload"})
                 return
             novo = spool.put(event_id, json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
+            if novo and typist is not None:
+                remote = envelope["evolution"]["data"]["key"]["remoteJid"]
+                typist.arm(str(payload.get("sessionId")), f"{digits(remote.split('@', 1)[0])}@c.us")
             self._reply(200, {"status": "queued" if novo else "duplicate"})
 
     return Handler
 
 
-def worker_loop(spool: Spool, cfg: Config, stop: threading.Event, relay: Relay | None = None) -> None:
+def worker_loop(
+    spool: Spool, cfg: Config, stop: threading.Event, relay: Relay | None = None, typist: Typist | None = None
+) -> None:
     ultimo_relay = 0.0
     while not stop.is_set():
         try:
             trabalho = deliver_due(spool, cfg, on_delivered=relay.arm if relay else None)
+            if typist is not None:
+                trabalho += typist.step()
             if relay is not None and time.time() - ultimo_relay >= cfg.relay_every_s:
                 ultimo_relay = time.time()
                 trabalho += relay.step()
@@ -565,14 +653,17 @@ def main() -> None:
     spool = Spool(os.path.join(cfg.data_dir, "spool.sqlite"))
     client = OpenWAClient(cfg.openwa_api_url, cfg.openwa_api_key) if cfg.openwa_api_url else None
     stop = threading.Event()
-    relay = Relay(cfg, spool, client)
+    typist = Typist(cfg, client)
+    relay = Relay(cfg, spool, client, typist=typist)
     if relay.enabled:
         relay.arm(time.time() - cfg.relay_window_s + 60)  # janela curta ao subir, caso haja resposta pendente
-    threading.Thread(target=worker_loop, args=(spool, cfg, stop, relay), daemon=True).start()
-    server = ThreadingHTTPServer((cfg.listen_host, cfg.listen_port), make_handler(cfg, spool, client))
+    threading.Thread(target=worker_loop, args=(spool, cfg, stop, relay, typist), daemon=True).start()
+    server = ThreadingHTTPServer((cfg.listen_host, cfg.listen_port), make_handler(cfg, spool, client, typist))
     log.info("wa-bridge no ar em %s:%s (%s, %d sessao(oes) mapeada(s), saida %s)", cfg.listen_host, cfg.listen_port,
              "enviando" if cfg.out_url else "modo seco", len(cfg.sessions),
              f"ligada para {len(cfg.send_allowlist)} destino(s)" if relay.enabled else "desligada")
+    log.info("digitando: %s (pre %.0fs, renova a cada %.0fs, max %.0fs)", "ligado" if typist.enabled else "desligado",
+             cfg.typing_pre_delay_s, cfg.typing_refresh_s, cfg.typing_max_s)
     try:
         server.serve_forever()
     finally:

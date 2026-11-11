@@ -58,6 +58,8 @@ Standby (record_only) <--GET /v1/connector/outbox (assinado)-- wa-bridge --send-
 | Variável do conector | Para quê |
 |---|---|
 | `SEND_ALLOWLIST` | números permitidos (só dígitos, separados por vírgula). Vazia = a saída fica desligada |
+| `TYPING_ENABLED` | `digitando…` para a pessoa (padrão `1`); só para destinos de `SEND_ALLOWLIST` |
+| `TYPING_PRE_DELAY_S`, `TYPING_REFRESH_S`, `TYPING_MAX_S` | começa 5 s depois da entrada (como o Next), renova a cada 4 s, para na resposta ou em 60 s |
 | `RELAY_WINDOW_S`, `RELAY_EVERY_S` | janela de consulta depois de cada entrada e intervalo (padrão 300 e 4) |
 
 ## O que entra e o que é ignorado
