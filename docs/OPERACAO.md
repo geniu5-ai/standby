@@ -37,6 +37,7 @@ O plano free **dorme após ~15 min sem tráfego de entrada**: a primeira chamada
 | `CONTROL_HMAC_SECRET` | assinatura de `/v1/control/*`, incluindo `/v1/control/wake`; sem ele esses endpoints respondem 503 |
 | `EVOLUTION_URL`, `EVOLUTION_API_KEY` | Evolution (histórico e "digitando"); com `record_only` nada é enviado |
 | `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`, `QSTASH_WAKE_URL` | wake pelo QStash: chaves de assinatura (console do QStash) e a URL do destino do schedule; sem a chave atual `/v1/control/qstash-wake` responde 503 |
+| `FAILOVER_PROBE_URL`, `QSTASH_FAILOVER_URL`, `FAILOVER_ALERT_URL`, `FAILOVER_ALERT_COOLDOWN_S` | vigia da VPS 002 em modo alerta (`WAKE.md`): URL sondada, URL pública da rota `/v1/control/qstash-failover`, webhook de aviso (secreta, opcional) e intervalo mínimo entre avisos (padrão 1800 s); sem `FAILOVER_PROBE_URL` a rota responde 503 |
 | `OMNIROUTE_API_KEY` | OmniRoute (resumos, motor legacy) |
 | `REPLY_ENGINE=agent`, `REPLY_AGENT_MODEL=openai:gpt-pool` | motor de resposta = Pydantic AI pelo combo `gpt-pool` do OmniRoute (o mesmo da produção, TRAPS #68 do Next) |
 | `OPENAI_BASE_URL=https://omni.geniuslabs.pro/v1`, `OPENAI_API_KEY` | como o Pydantic AI alcança o OmniRoute |

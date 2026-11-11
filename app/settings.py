@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     QSTASH_CURRENT_SIGNING_KEY: SecretStr | None = None
     QSTASH_NEXT_SIGNING_KEY: SecretStr | None = None
     QSTASH_WAKE_URL: str = ""
+    # Vigia da VPS 002 em modo alerta (app/failover.py). Todas vazias por padrao: sem
+    # FAILOVER_PROBE_URL ou sem a chave do QStash a rota /v1/control/qstash-failover responde 503.
+    QSTASH_FAILOVER_URL: str = ""
+    FAILOVER_PROBE_URL: str = ""
+    FAILOVER_ALERT_URL: SecretStr | None = None
+    FAILOVER_ALERT_COOLDOWN_S: int = Field(default=1800, ge=60, le=86400)
     # Tempo sem ato da equipe ate a marcacao de dono humano (automation_state
     # 'crew', o "Humano" do App, a "equipe" do chairman) voltar sozinha para o
     # bot (open).  Ato da equipe = a marcacao (handoff automatico com prazo ou
