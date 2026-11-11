@@ -631,6 +631,84 @@ async def control_qstash_wake(request: Request) -> dict[str, Any]:
     return await _estado_do_wake(runtime_settings, origem="qstash")
 
 
+@app.post("/v1/control/qstash-failover")
+async def control_qstash_failover(request: Request) -> dict[str, Any]:
+    """Callback de falha do vigia da VPS 002 (QStash): confirma a queda e avisa, em MODO ALERTA.
+
+    A propria chamada acorda o Standby. A rota sonda a 002 de novo antes de agir e, se a queda
+    se confirmar, loga e posta no webhook de aviso. NAO liga o ``live`` nem altera o modo de
+    entrega: assumir o atendimento e a trava 1 do ``AGENTS.md``.
+    """
+    from app import failover
+    from app.qstash_auth import HEADER, assinatura_valida
+
+    runtime_settings = get_settings()
+    current = runtime_settings.QSTASH_CURRENT_SIGNING_KEY
+    if current is None or not runtime_settings.FAILOVER_PROBE_URL:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    proxima = runtime_settings.QSTASH_NEXT_SIGNING_KEY or current
+    body = await _read_limited_body(
+        request, max_bytes=runtime_settings.WEBHOOK_MAX_BODY_BYTES
+    )
+    if not assinatura_valida(
+        body,
+        request.headers.get(HEADER),
+        current_key=current.get_secret_value(),
+        next_key=proxima.get_secret_value(),
+        url=runtime_settings.QSTASH_FAILOVER_URL or None,
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        callback = json.loads(body) if body else {}
+    except ValueError:
+        callback = {}
+    alerta = runtime_settings.FAILOVER_ALERT_URL
+    return await failover.tratar_callback(
+        probe_url=runtime_settings.FAILOVER_PROBE_URL,
+        alert_url=alerta.get_secret_value() if alerta else None,
+        cooldown_s=runtime_settings.FAILOVER_ALERT_COOLDOWN_S,
+        callback=callback if isinstance(callback, dict) else {},
+    )
+
+
+@app.post("/v1/control/betterstack-incident")
+async def control_betterstack_incident(request: Request) -> dict[str, Any]:
+    """Webhook de saida do Better Stack (incidente aberto em monitor da VPS 002): mesmo modo alerta.
+
+    Segundo gatilho do vigia, independente do QStash. Autentica pelo cabecalho ``X-Webhook-Secret``
+    (o Better Stack nao assina o corpo). So age nos monitores de ``BETTERSTACK_WATCHED_MONITORS``;
+    qualquer outro incidente responde 200 ``ignored``. Confirma a queda com a propria sonda antes
+    de avisar e NAO liga o ``live``.
+    """
+    from app import failover
+
+    runtime_settings = get_settings()
+    segredo = runtime_settings.BETTERSTACK_WEBHOOK_SECRET
+    if segredo is None or not runtime_settings.FAILOVER_PROBE_URL:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    body = await _read_limited_body(
+        request, max_bytes=runtime_settings.WEBHOOK_MAX_BODY_BYTES
+    )
+    recebido = request.headers.get("X-Webhook-Secret", "")
+    if not hmac.compare_digest(recebido.encode(), segredo.get_secret_value().encode()):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        payload = json.loads(body) if body else {}
+    except ValueError:
+        payload = {}
+    monitor_id, _nome = failover.monitor_do_incidente(payload)
+    vigiados = {m.strip() for m in runtime_settings.BETTERSTACK_WATCHED_MONITORS.split(",") if m.strip()}
+    if vigiados and monitor_id not in vigiados:
+        return {"status": "ignored", "mode": "alert"}
+    alerta = runtime_settings.FAILOVER_ALERT_URL
+    return await failover.tratar_callback(
+        probe_url=runtime_settings.FAILOVER_PROBE_URL,
+        alert_url=alerta.get_secret_value() if alerta else None,
+        cooldown_s=runtime_settings.FAILOVER_ALERT_COOLDOWN_S,
+        callback={"status": "betterstack", "retried": None, "scheduleId": f"betterstack:{monitor_id}"},
+    )
+
+
 @app.post("/v1/control/tenant_registry")
 async def control_tenant_registry(request: Request) -> dict[str, str | bool]:
     """Authenticated self-serve link of a provider instance to a tenant.
