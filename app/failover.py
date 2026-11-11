@@ -102,6 +102,17 @@ async def avisar(url: str, texto: str, detalhes: dict[str, Any], *, cliente: htt
             await cliente.aclose()
 
 
+def monitor_do_incidente(payload: Any) -> tuple[str | None, str | None]:
+    """(id do monitor, nome do incidente) do payload JSON:API de incidente do Better Stack."""
+    if not isinstance(payload, dict):
+        return None, None
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    relacao = ((data.get("relationships") or {}).get("monitor") or {}).get("data") or {}
+    nome = (data.get("attributes") or {}).get("name")
+    monitor = relacao.get("id")
+    return (str(monitor) if monitor is not None else None, nome if isinstance(nome, str) else None)
+
+
 async def tratar_callback(
     *,
     probe_url: str,

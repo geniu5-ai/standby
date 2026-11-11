@@ -262,3 +262,84 @@ def test_script_exige_https_schedule_e_callback(monkeypatch):
     assert script.main(["apply", "--schedule", "watchdog", "--url", SONDA]) == 2  # sem callback
     assert script.main(["apply", "--schedule", "wake"]) == 2  # sem destino
     assert script.main(["apply"]) == 2  # sem --schedule
+
+
+# --- webhook de saida do Better Stack ----------------------------------------------------------
+
+SEGREDO_BS = "segredo-do-webhook-de-teste-0123456789"
+INCIDENTE = (
+    b'{"data":{"id":"1","type":"incident","attributes":{"name":"Next \xc2\xb7 /health","cause":"Status 503"},'
+    b'"relationships":{"monitor":{"data":{"id":"5222117","type":"monitor"}}}}}'
+)
+
+
+def test_monitor_do_incidente_le_id_e_nome_e_tolera_lixo():
+    assert failover.monitor_do_incidente({"data": {"attributes": {"name": "x"}, "relationships": {"monitor": {"data": {"id": 7}}}}}) == ("7", "x")
+    assert failover.monitor_do_incidente({}) == (None, None)
+    assert failover.monitor_do_incidente("texto") == (None, None)
+    assert failover.monitor_do_incidente({"data": []}) == (None, None)
+
+
+@pytest.fixture
+def cliente_bs(monkeypatch):
+    from app import main as main_mod
+    from app.settings import get_settings
+
+    monkeypatch.setenv("BETTERSTACK_WEBHOOK_SECRET", SEGREDO_BS)
+    monkeypatch.setenv("BETTERSTACK_WATCHED_MONITORS", "5222117, 5222118")
+    monkeypatch.setenv("FAILOVER_PROBE_URL", SONDA)
+    monkeypatch.setenv("FAILOVER_ALERT_URL", "https://alerta.exemplo.test/x")
+    get_settings.cache_clear()
+    yield TestClient(main_mod.app)
+    get_settings.cache_clear()
+
+
+def test_betterstack_incidente_de_monitor_vigiado_confirma_e_avisa(cliente_bs, monkeypatch):
+    avisos: list = []
+
+    async def sondar(url, **kw):
+        return failover.Sonda(False, 3, 503, None)
+
+    async def avisar(url, texto, detalhes, **kw):
+        avisos.append(detalhes["schedule"])
+        return True
+
+    monkeypatch.setattr(failover, "sondar", sondar)
+    monkeypatch.setattr(failover, "avisar", avisar)
+    resposta = cliente_bs.post("/v1/control/betterstack-incident", content=INCIDENTE, headers={"X-Webhook-Secret": SEGREDO_BS})
+    assert resposta.status_code == 200 and resposta.json()["status"] == "alert" and resposta.json()["mode"] == "alert"
+    assert avisos == ["betterstack:5222117"]
+
+
+def test_betterstack_incidente_de_outro_monitor_e_ignorado_sem_sondar(cliente_bs, monkeypatch):
+    async def sondar(url, **kw):
+        pytest.fail("nao devia sondar")
+
+    monkeypatch.setattr(failover, "sondar", sondar)
+    outro = INCIDENTE.replace(b"5222117", b"999")
+    resposta = cliente_bs.post("/v1/control/betterstack-incident", content=outro, headers={"X-Webhook-Secret": SEGREDO_BS})
+    assert resposta.status_code == 200 and resposta.json()["status"] == "ignored"
+
+
+def test_betterstack_segredo_errado_ou_ausente_da_401(cliente_bs):
+    caminho = "/v1/control/betterstack-incident"
+    assert cliente_bs.post(caminho, content=INCIDENTE).status_code == 401
+    assert cliente_bs.post(caminho, content=INCIDENTE, headers={"X-Webhook-Secret": "errado"}).status_code == 401
+
+
+def test_betterstack_sem_segredo_ou_sem_url_da_sonda_falha_fechado(monkeypatch):
+    from app import main as main_mod
+    from app.settings import get_settings
+
+    for nome in ("BETTERSTACK_WEBHOOK_SECRET", "FAILOVER_PROBE_URL"):
+        monkeypatch.setenv("BETTERSTACK_WEBHOOK_SECRET", SEGREDO_BS)
+        monkeypatch.setenv("FAILOVER_PROBE_URL", SONDA)
+        monkeypatch.delenv(nome)
+        get_settings.cache_clear()
+        try:
+            resposta = TestClient(main_mod.app).post(
+                "/v1/control/betterstack-incident", content=INCIDENTE, headers={"X-Webhook-Secret": SEGREDO_BS}
+            )
+            assert resposta.status_code == 503, nome
+        finally:
+            get_settings.cache_clear()

@@ -164,6 +164,12 @@ QStash schedule `vps002-watchdog` (*/5)        VPS 002                   Standby
 - **Webhook genérico de propósito:** o mesmo `POST` serve ao Better Stack (incoming webhook), ao
   Slack, ao Keep ou a qualquer ferramenta que o chairman adote; trocar de destino é trocar a
   variável.
+- **Segundo gatilho, independente do QStash (Better Stack):** os monitores da 002 no Better Stack
+  checam a cada 30 s de 4 regiões. Um webhook de saída (`incident_change`, só `on_incident_started`)
+  chama `POST /v1/control/betterstack-incident` com o cabeçalho `X-Webhook-Secret` (o Better Stack não
+  assina o corpo; só aceita cabeçalho fixo ou basic auth). A rota só age nos monitores de
+  `BETTERSTACK_WATCHED_MONITORS`, confirma a queda com a mesma sonda e avisa pelo mesmo webhook. Os
+  dois gatilhos compartilham o cooldown do aviso.
 - **Criar o schedule:** `python scripts/qstash_schedule.py apply --schedule watchdog --aplicar`,
   depois do deploy desta rota e das variáveis abaixo.
 

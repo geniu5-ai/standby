@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     FAILOVER_PROBE_URL: str = ""
     FAILOVER_ALERT_URL: SecretStr | None = None
     FAILOVER_ALERT_COOLDOWN_S: int = Field(default=1800, ge=60, le=86400)
+    # Segundo gatilho do vigia: webhook de saida do Better Stack (incidente aberto). Autenticado por
+    # segredo compartilhado no cabecalho X-Webhook-Secret; BETTERSTACK_WATCHED_MONITORS lista os ids
+    # dos monitores da VPS 002 (separados por virgula). Sem o segredo a rota responde 503.
+    BETTERSTACK_WEBHOOK_SECRET: SecretStr | None = None
+    BETTERSTACK_WATCHED_MONITORS: str = ""
     # Tempo sem ato da equipe ate a marcacao de dono humano (automation_state
     # 'crew', o "Humano" do App, a "equipe" do chairman) voltar sozinha para o
     # bot (open).  Ato da equipe = a marcacao (handoff automatico com prazo ou
