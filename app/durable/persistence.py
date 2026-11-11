@@ -2566,8 +2566,27 @@ def apply_status_with_session(
         },
     ).scalar_one_or_none()
     if applied is None:
-        raise ClientStateMissing("trusted client row does not exist or audit is stale")
+        existe = session.execute(
+            _CLIENT_EXISTS_SQL, {"tenant_id": tenant_id, "phone": phone}
+        ).scalar_one_or_none()
+        if existe is None:
+            raise ClientStateMissing("trusted client row does not exist")
+        # Auditoria superada: o mesmo telefone ja tem uma auditoria de sequencia maior (a conversa avancou
+        # enquanto este job esperava na fila). A auditoria fica registrada; o estado do cliente nao volta.
+        # Antes isto levantava erro e o job aparecia como falha no Procrastinate (11/nov/2026).
+        return False
     return True
+
+
+_CLIENT_EXISTS_SQL = text(
+    """
+    /* client.exists */
+    SELECT 1
+    FROM genius_next.clients
+    WHERE tenant_id = :tenant_id
+      AND phone = :phone
+    """
+)
 
 
 _INSERT_CONVERSATION_FACT_SQL = text(
