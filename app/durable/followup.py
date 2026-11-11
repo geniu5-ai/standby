@@ -624,11 +624,36 @@ _LIFECYCLE_STATE_SQL = _sql_text(
 )
 
 
+# O paciente escreveu depois do turno de origem?
+# 11/nov/2026: a comparacao era so por ``conversation_sequence``, sem olhar a conversa. O mesmo
+# telefone pode ter mais de uma conversa no tenant (instancias/provedores), cada uma com o seu
+# contador: uma conversa antiga com sequencia alta fazia TODO follow-up de uma conversa nova parar
+# como "paciente respondeu" (visto no Standby: 28 mensagens antigas pelo Zernio paravam o ciclo da
+# conversa de teste, sequencia 4). Agora:
+#   - mesma conversa do turno de origem (provider, instance, remote_jid): por sequencia;
+#   - outra conversa do mesmo telefone: por tempo, so o que chegou depois do turno de origem
+#     (quem escreveu por outro canal depois continua parando o ciclo);
+#   - sem a linha do turno de origem: regra antiga (qualquer conversa, por sequencia), que so
+#     erra para o lado de NAO enviar.
 _INBOUND_AFTER_ORIGIN_SQL = _sql_text(
     """
     /* followup.active_event_after */
-    SELECT 1 FROM genius_next.events WHERE tenant_id = :tenant_id AND phone = :phone
-    AND direction = 'inbound' AND conversation_sequence > :origin_sequence LIMIT 1
+    SELECT 1
+    FROM genius_next.events AS e
+    LEFT JOIN genius_next.turns AS t
+      ON t.id = :origin_turn_id AND t.tenant_id = e.tenant_id
+    WHERE e.tenant_id = :tenant_id
+      AND e.phone = :phone
+      AND e.direction = 'inbound'
+      AND CASE
+            WHEN t.id IS NULL THEN e.conversation_sequence > :origin_sequence
+            WHEN e.provider IS NOT DISTINCT FROM t.provider
+                 AND e.instance IS NOT DISTINCT FROM t.instance
+                 AND e.remote_jid IS NOT DISTINCT FROM t.remote_jid
+              THEN e.conversation_sequence > :origin_sequence
+            ELSE e.received_at > t.created_at
+          END
+    LIMIT 1
     """
 )
 
@@ -809,7 +834,12 @@ def _should_continue(
 
     active = session.execute(
         _INBOUND_AFTER_ORIGIN_SQL,
-        {"tenant_id": tenant_id, "phone": phone, "origin_sequence": origin_sequence},
+        {
+            "tenant_id": tenant_id,
+            "phone": phone,
+            "origin_sequence": origin_sequence,
+            "origin_turn_id": origin_turn_id,
+        },
     ).scalar_one_or_none()
     if active is not None:
         return False  # customer responded

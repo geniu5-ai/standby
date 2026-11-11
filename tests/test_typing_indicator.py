@@ -134,3 +134,39 @@ def test_entrega_da_resposta_apaga_o_digitando(tmp_path):
     relay._deliver({"id": 41, "instance": "mariaeduarda-ficticia", "destination_jid": f"{DESTINO}@s.whatsapp.net",
                     "text": "Oi!"}, now=107.0)
     assert reg.chamadas[-1] == (SESSAO, CHAT, "paused")
+
+
+# --- janela lenta do relé (follow-ups) ---------------------------------------------------------
+
+
+def _relay(tmp_path, **extra):
+    cfg = _cfg(out_url="https://standby.example", out_secret="segredo-de-saida-0123456789", **extra)
+    chamadas = []
+
+    def pedido(metodo, url, corpo, cabecalhos, timeout):
+        chamadas.append((metodo, url))
+        return 200, b'{"items": []}'
+
+    class Cliente:
+        def send_text(self, sid, chat, text):
+            return ("sent", "MSG-1", None)
+
+    return wb.Relay(cfg, wb.Spool(str(tmp_path / "s.sqlite")), Cliente(), request=pedido), chamadas
+
+
+def test_rele_rapido_depois_lento_ate_cobrir_os_follow_ups(tmp_path):
+    relay, chamadas = _relay(tmp_path)
+    relay.arm(now=1000.0)
+    assert relay.interval(now=1010.0) == 4.0  # janela rapida (5 min)
+    assert relay.interval(now=1000.0 + 301) == 30.0  # fase lenta
+    relay.step(now=1000.0 + 1900)  # 31 min depois: ainda consulta (follow-up de 30 min)
+    assert len(chamadas) == 1
+    relay.step(now=1000.0 + 2701)  # passou dos 45 min: para
+    assert len(chamadas) == 1
+
+
+def test_fase_lenta_desligada_volta_ao_comportamento_antigo(tmp_path):
+    relay, chamadas = _relay(tmp_path, relay_slow_window_s=0.0)
+    relay.arm(now=1000.0)
+    relay.step(now=1000.0 + 301)
+    assert chamadas == []
