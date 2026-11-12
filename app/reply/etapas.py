@@ -85,13 +85,13 @@ _INSTRUCOES: dict[str, str] = {
     # aquele item no catalogo, a saida e' dizer que depende de avaliacao,
     # nunca inventar nem pedir detalhe clinico.
     "preco": (
-        "Situacao desta mensagem: ela perguntou preco. Responda o valor das "
-        "informacoes da empresa agora, direto — sem pergunta antes, sem "
-        "enrolar. Se for faixa ou 'a partir de', diga assim mesmo, com o "
-        "parcelamento quando houver. Feche emendando o proximo passo: convide "
-        "pra avaliacao. Se o item nao tiver valor nas informacoes da empresa, "
-        "diga que depende da avaliacao — nunca invente numero, nunca peca "
-        "detalhe clinico pra estimar."
+        "Situacao desta mensagem: ela perguntou preco. Comece com uma frase "
+        "gentil que mostre que voce entendeu o pedido. Siga as regras de valores "
+        "das instrucoes da empresa: diga o valor escrito do item que ela pediu, "
+        "ou faca antes a unica pergunta que essas regras pedirem. Nao puxe "
+        "agendamento, nao peca dados e nao fale de outro item nesta mensagem. "
+        "Se o item nao tiver valor escrito, siga a regra de confirmar com a "
+        "equipe; nunca invente numero."
     ),
     # 29/ago/2026: nao oferecer mais dia/periodo como se ja estivesse certo --
     # ordem do chairman, achado ao vivo: "vou ver se tem um horario" em vez de
@@ -106,11 +106,10 @@ _INSTRUCOES: dict[str, str] = {
     # prometer: perguntar a preferencia dela e devolver a confirmacao pra
     # equipe, nao pro bot.
     "fechamento": (
-        "Situacao desta mensagem: ela sinalizou que quer marcar. Nao pergunte se "
-        "ela quer — pergunte direto qual dia da semana ou periodo do dia "
-        "funciona melhor pra ela. Nao confirme dia nem horario como certo, "
-        "voce nao tem a agenda em maos: diga que a equipe confirma em seguida. "
-        "Nunca prometa verificar e voltar por conta propria."
+        "Situacao desta mensagem: ela sinalizou que quer marcar. Siga as regras "
+        "de agendamento das instrucoes da empresa. Nao confirme dia nem horario "
+        "como certos: a equipe confirma. Nunca prometa verificar e voltar por "
+        "conta propria."
     ),
     "andamento": "",
 }

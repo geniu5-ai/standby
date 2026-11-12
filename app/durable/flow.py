@@ -77,7 +77,7 @@ from app.durable.handoff_notice import (
 from app.reply.handoff_promotion import promote_forwarding_to_handoff
 from app.reply.safety_routes import EMERGENCY_DRAFT, safety_handoff_draft
 from app.reply.split import split_human_reply
-from app.status.rules import is_deferral_or_closing, is_farewell
+from app.status.rules import is_farewell, is_refusal
 from app.security.guard import GuardAssessment, GuardDisposition, GuardStage, assess_locally
 from app.settings import get_settings
 
@@ -239,7 +239,7 @@ def _start_follow_up_v2(
     # adiamento (is_deferral_or_closing) e despedida ("ok obrigada") na ULTIMA
     # fala tambem fecha o assunto.  A guarda definitiva, com o teto de 24 h/7
     # dias, fica em ensure_follow_up_v2_lifecycle_txn (app/durable/followup.py).
-    if any(is_deferral_or_closing(t) for t in falas[-2:]) or (falas and is_farewell(falas[-1])):
+    if any(is_refusal(t) for t in falas[-2:]) or (falas and is_farewell(falas[-1])):
         return
     defer_once(
         follow_up_start_job,

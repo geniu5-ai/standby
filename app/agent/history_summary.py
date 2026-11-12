@@ -11,7 +11,7 @@ future reply.
 
 Two hard constraints inherited from the rest of the pipeline:
   * Same HTTP/endpoint/api-key pattern as ``fetch_history`` (no new provider),
-    and the SAME DeepSeek endpoint/model used today by reply classification.
+    and the SAME OmniRoute endpoint/model (``OMNIROUTE_*``) used by the rest of the pipeline.
   * Best-effort only: a fetch/summarize failure returns ``None`` and must never
     derail the enclosing conversation turn.
 """
@@ -117,9 +117,9 @@ def _secret_value(secret: SecretStr | None) -> str:
     return secret.get_secret_value()
 
 
-def _deepseek_secret_value(secret: SecretStr | None) -> str:
+def _secret_value(secret: SecretStr | None) -> str:
     if secret is None:
-        raise ValueError("DeepSeek API key is not configured")
+        raise ValueError("OmniRoute API key is not configured")
     return secret.get_secret_value()
 
 
@@ -237,9 +237,9 @@ def summarize_history(
     messages: list[dict[str, str]],
     client: httpx.Client | None = None,
 ) -> str | None:
-    """Best-effort DeepSeek summarization of the paginated full history.
+    """Best-effort LLM summarization of the paginated full history.
 
-    Uses the same DeepSeek endpoint/model/API key already used by
+    Uses the same OmniRoute endpoint/model/API key already used by
     ``_classify_customer_status`` (no new provider).  The prompt is dedicated
     to factual short summaries; the output is plain text, returned verbatim, so
     no extra JSON parsing is required before it is stored as a string inside
@@ -258,7 +258,7 @@ def summarize_history(
         response = http.post(
             f"{settings.OMNIROUTE_BASE_URL.rstrip('/')}/chat/completions",
             headers={
-                "Authorization": f"Bearer {_deepseek_secret_value(settings.OMNIROUTE_API_KEY)}",
+                "Authorization": f"Bearer {_secret_value(settings.OMNIROUTE_API_KEY)}",
                 "Content-Type": "application/json",
             },
             json={

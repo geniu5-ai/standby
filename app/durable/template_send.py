@@ -49,10 +49,10 @@ SERVICE_WINDOW = timedelta(hours=24)
 # ``{{1}}``, ``{{ 1 }}`` — as variaveis de corpo posicionais da Meta.
 _PLACEHOLDER = re.compile(r"\{\{\s*(\d+)\s*\}\}")
 
-# Tenant Kyrios (clínica médica) e a conta Zernio dele. Os modelos abaixo foram
+# Tenant da clínica médica (cliente real em produção) e a conta Zernio dele. Os modelos abaixo foram
 # confirmados APPROVED via GET /v1/whatsapp/templates?accountId=... em 20/out/2026.
-KYRIOS_TENANT_ID = "6f4d3510-b5bc-4c19-9d44-2679f9dbfdb9"
-KYRIOS_ZERNIO_ACCOUNT = "6ac69dc249c222c48d0c0d53"
+CLINIC_TENANT_ID = "6f4d3510-b5bc-4c19-9d44-2679f9dbfdb9"
+CLINIC_ZERNIO_ACCOUNT = "6ac69dc249c222c48d0c0d53"
 
 _RETOMADA_BODY = (
     "Oi, {{1}}! Aqui é a Júlia, da recepção do Kyrios. Ainda posso te ajudar "
@@ -106,7 +106,7 @@ def render_body(body: str, variables: list[str]) -> str:
 # Catalogo por tenant. Modelo novo so entra aqui com o status confirmado por
 # GET (ou ordem do chairman para criar na Meta) — nunca no escuro.
 APPROVED_TEMPLATES: dict[str, dict[str, ApprovedTemplate]] = {
-    KYRIOS_TENANT_ID: {
+    CLINIC_TENANT_ID: {
         "retomada_kyrios_utilidade": ApprovedTemplate(
             name="retomada_kyrios_utilidade",
             category="UTILITY",

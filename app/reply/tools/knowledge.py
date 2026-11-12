@@ -133,7 +133,8 @@ def catalogo_inline_como_instrucao(
         "dado da clinica — preco, agenda, endereco, procedimento, forma de "
         "pagamento. Use exatamente o que esta aqui e nao complete com "
         "suposicao. O que nao estiver aqui, voce nao sabe.\n"
-        "Itens com valor: so cite preco se a pessoa tiver perguntado. "
+        "Valores: de o preco escrito do item que a pessoa pediu, na ordem do "
+        "atendimento (acolher, engajar, depois o preco). "
         "Endereco, horario e formas de pagamento sao de uso livre.\n\n"
         f"{blocos}"
     )

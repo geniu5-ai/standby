@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from app.contracts import (
     ConversationControlRequest,
     EvolutionWebhook,
+    TenantRegistrySetEnabledRequest,
     TenantRegistryUpsertRequest,
     TrustedIngress,
 )
@@ -52,6 +53,7 @@ from app.settings import Settings, get_settings
 from app.tenant_registry import (
     is_tenant_disabled,
     resolve_tenant,
+    set_tenant_enabled_txn,
     upsert_tenant_registry_txn,
 )
 
@@ -141,6 +143,39 @@ def _ingest(event: TrustedIngress) -> None:
     from app.durable.flow import ingest_event_workflow
 
     ingest_event_workflow(event)
+
+
+def _jid_shape(remote_jid: str) -> str:
+    """Formato do JID para log, nunca o numero: ``numerico@s.whatsapp.net``,
+    ``outro@broadcast``, ``com_dispositivo@s.whatsapp.net``."""
+    local, sep, domain = remote_jid.rpartition("@")
+    if not sep:
+        return "sem_arroba"
+    if not local:
+        forma = "vazio"
+    elif local.isdigit():
+        forma = "numerico"
+    elif ":" in local:
+        forma = "com_dispositivo"
+    elif "-" in local and local.replace("-", "").isdigit():
+        forma = "grupo"
+    else:
+        forma = "outro"
+    return f"{forma}@{domain[:32]}"
+
+
+def _rejection_reasons(exc: Exception) -> list[str]:
+    """Motivo de um 422 para log: campo e tipo do erro, nunca o valor recebido.
+
+    As mensagens de ``ValueError`` do ingresso sao textos fixos do codigo
+    (ex.: "malformed or unsupported WhatsApp JID"), sem dado do cliente.
+    """
+    if isinstance(exc, ValidationError):
+        return [
+            f"{'.'.join(map(str, error['loc'])) or '<modelo>'}:{error['type']}"
+            for error in exc.errors(include_input=False, include_url=False)
+        ]
+    return [f"{type(exc).__name__}: {str(exc)[:120]}"]
 
 
 def _webhook_is_authorized(request: Request, body: bytes, secret: str) -> bool:
@@ -381,6 +416,17 @@ async def _accept_ingress_unspanned(
     try:
         trusted = build_trusted_ingress(webhook, tenant_id=tenant_id, provider=provider)
     except (ValidationError, ValueError) as exc:
+        # 02/nov/2026: este 422 era mudo e descartava mensagem de tenant
+        # cadastrado sem dizer por que.  Loga o formato do JID e o motivo,
+        # nunca o numero nem o texto.
+        logging.getLogger(__name__).warning(
+            "ingress rejected (422): provider=%s instance=%s event=%s jid=%s motivo=%s",
+            provider,
+            webhook.instance,
+            webhook.event,
+            _jid_shape(webhook.data.key.remote_jid),
+            _rejection_reasons(exc),
+        )
         raise HTTPException(status_code=422, detail="Invalid webhook") from exc
     observability.annotate(
         tenant_id=trusted.tenant_id,
@@ -622,6 +668,11 @@ async def _process_zernio_webhook(request: Request) -> dict[str, str]:
         )
         return {"status": "ignored", "reason": ignored.reason}
     except (ValidationError, ValueError) as exc:
+        logging.getLogger(__name__).warning(
+            "zernio webhook rejected (422): event=%s motivo=%s",
+            payload.get("event"),
+            _rejection_reasons(exc),
+        )
         raise HTTPException(status_code=422, detail="Invalid webhook") from exc
 
     def remember_conversation(trusted: TrustedIngress) -> None:
@@ -892,6 +943,51 @@ async def control_tenant_registry(request: Request) -> dict[str, str | bool]:
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Service unavailable") from exc
     return {"outcome": result.outcome, "enabled": result.enabled}
+
+
+async def _set_tenant_registry_enabled(
+    request: Request, *, enabled: bool
+) -> dict[str, str | bool]:
+    runtime_settings = get_settings()
+    secret_setting = runtime_settings.CONTROL_HMAC_SECRET
+    if secret_setting is None:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    body = await _read_limited_body(
+        request, max_bytes=runtime_settings.WEBHOOK_MAX_BODY_BYTES
+    )
+    if not _control_request_is_authorized(
+        body,
+        request.headers.get("X-Control-Timestamp"),
+        request.headers.get("X-Control-Signature-256"),
+        secret_setting.get_secret_value(),
+        max_age_seconds=runtime_settings.CONTROL_HMAC_MAX_AGE_SECONDS,
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        payload = TenantRegistrySetEnabledRequest.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Invalid request") from exc
+    try:
+        result = await asyncio.to_thread(set_tenant_enabled_txn, payload, enabled)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Service unavailable") from exc
+    if result.outcome == "not_found":
+        raise HTTPException(status_code=404, detail="Instance not registered")
+    if result.outcome == "instance_owned_by_other_tenant":
+        raise HTTPException(status_code=409, detail="Instance owned by other tenant")
+    return {"outcome": result.outcome, "enabled": result.enabled}
+
+
+@app.post("/v1/control/tenant_registry/enable")
+async def control_tenant_registry_enable(request: Request) -> dict[str, str | bool]:
+    """Authenticated: the app turns a connected channel on (``enabled=true``)."""
+    return await _set_tenant_registry_enabled(request, enabled=True)
+
+
+@app.post("/v1/control/tenant_registry/disable")
+async def control_tenant_registry_disable(request: Request) -> dict[str, str | bool]:
+    """Authenticated: the app turns a disconnected channel off (``enabled=false``)."""
+    return await _set_tenant_registry_enabled(request, enabled=False)
 
 
 @app.get("/health")

@@ -1,6 +1,6 @@
 """Trava por codigo sobre a sugestao do Manager no modo follow (26/out/2026).
 
-Medido em sombra no Kyrios (docs/specs/vendedor-manager-prompts.md): o Manager manda texto
+Medido em sombra na clínica (docs/specs/vendedor-manager-prompts.md): o Manager manda texto
 livre em 24 de 24 conversas fora da janela de 24 h e manda chamar o paciente em 8 de 21
 conversas em que a divida e da clinica. Quando existir executor, o LLM so escolhe angulo e
 dica; canal, se chama e quando vem daqui e de ``plan.py``. Funcao pura, nao envia nada.

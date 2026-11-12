@@ -9,7 +9,12 @@ varredores a cada minuto olham o banco e re-agendam o que ficou no meio:
 - ``retoma_turnos_presos``: turno ``claimed``/``processing`` ha mais de ``TURNO_PRESO_APOS_S`` sem
   nenhum job da conversa vivo. Antes ele so era retomado quando o paciente escrevia de novo.
 
-Ambos so agendam; quem faz o trabalho e o mesmo codigo do caminho normal.
+- ``retoma_followups_orfaos`` (06/nov/2026): ciclo de follow-up ``scheduled`` sem nenhum job vivo
+  (o ``follow_up_send`` esgotou o ``RETRY_CADEIA``, o job sumiu ou o worker caiu no meio). Re-agenda o
+  proximo despertar a partir do ultimo recibo ``confirmed``; a regra de parar, a janela e o recibo
+  continuam valendo no despertar, entao repetir nunca duplica envio.
+
+Todos so agendam; quem faz o trabalho e o mesmo codigo do caminho normal.
 """
 
 from __future__ import annotations
@@ -32,6 +37,8 @@ logger = logging.getLogger(__name__)
 OUTBOX_PENDENTE_APOS_S = 120
 TURNO_PRESO_APOS_S = 180
 LIMITE_POR_VARREDURA = 50
+FOLLOWUP_ORFAO_APOS_S = 900  # ciclo scheduled sem job vivo ha 15 min: ninguem vai acordar
+FOLLOWUP_ORFAO_ATE_S = 3 * 24 * 3600  # nao ressuscita ciclo com mais de 3 dias
 
 _OUTBOX_PENDENTE_SQL = text(
     """
@@ -60,6 +67,42 @@ _TURNOS_PRESOS_SQL = text(
       AND t.claimed_at < now() - make_interval(secs => :apos)
     ORDER BY t.claimed_at
     LIMIT :limite
+    """
+)
+
+_FOLLOWUP_ORFAOS_SQL = text(
+    """
+    /* reaper.followup_orfaos */
+    SELECT l.tenant_id::text AS tenant_id, l.origin_turn_id,
+           (SELECT j.args FROM procrastinate_jobs j
+             WHERE j.task_name IN ('follow_up_wake', 'follow_up_send')
+               AND j.args ? 'target_24h'
+               AND j.args->>'tenant_id' = l.tenant_id::text
+               AND j.args->>'origin_turn_id' = l.origin_turn_id
+             ORDER BY j.id DESC LIMIT 1) AS args,
+           COALESCE((SELECT max(r.attempt) FROM genius_next.follow_up_attempt_receipts r
+                      WHERE r.tenant_id = l.tenant_id AND r.origin_turn_id = l.origin_turn_id
+                        AND r.status = 'confirmed'), 0) AS ultimo_confirmado
+    FROM genius_next.follow_up_lifecycles l
+    WHERE l.state = 'scheduled'
+      AND l.updated_at < now() - make_interval(secs => :apos)
+      AND l.updated_at > now() - make_interval(secs => :ate)
+      AND NOT EXISTS (
+            SELECT 1 FROM procrastinate_jobs j
+             WHERE j.task_name IN ('follow_up_start', 'follow_up_wake', 'follow_up_send', 'follow_up_close')
+               AND j.status IN ('todo', 'doing')
+               AND j.args->>'tenant_id' = l.tenant_id::text
+               AND j.args->>'origin_turn_id' = l.origin_turn_id)
+    ORDER BY l.updated_at
+    LIMIT :limite
+    """
+)
+
+_FOLLOWUP_TOCA_SQL = text(
+    """
+    /* reaper.followup_toca */
+    UPDATE genius_next.follow_up_lifecycles SET updated_at = now()
+    WHERE tenant_id::text = :tenant_id AND origin_turn_id = :origin_turn_id AND state = 'scheduled'
     """
 )
 
@@ -108,6 +151,12 @@ def release_from_row(row: Any) -> TurnRelease:
 def _rows(sql: Any, **params: Any) -> list[Any]:
     with Session(get_engine(get_settings().DATABASE_URL)) as session:
         return list(session.execute(sql, params).mappings().all())
+
+
+def _rows_exec(sql: Any, **params: Any) -> None:
+    with Session(get_engine(get_settings().DATABASE_URL)) as session:
+        session.execute(sql, params)
+        session.commit()
 
 
 def _conversa_tem_job_vivo(conversation_id: str) -> bool:
@@ -162,10 +211,54 @@ def retoma_turnos_presos() -> int:
     return retomados
 
 
-@jobs.periodic(cron="*/30 * * * *")  # Neon free: a cada 30 min
+def retoma_followups_orfaos() -> int:
+    """Re-agenda o proximo despertar de ciclo de follow-up que ficou sem nenhum job vivo.
+
+    O proximo passo sai do ultimo recibo ``confirmed``: sem recibo, a tentativa 1; com as 4
+    confirmadas, o fechamento do ciclo. O despertar revalida tudo (paciente respondeu, equipe
+    assumiu, janela do provedor) antes de pedir envio, e o recibo impede mandar duas vezes.
+    """
+    from app.durable.followup import (
+        FOLLOWUP_V2_WAITS_SECONDS,
+        _schedule_wake,
+        follow_up_close_job,
+    )
+
+    retomados = 0
+    for row in _rows(
+        _FOLLOWUP_ORFAOS_SQL,
+        apos=FOLLOWUP_ORFAO_APOS_S,
+        ate=FOLLOWUP_ORFAO_ATE_S,
+        limite=LIMITE_POR_VARREDURA,
+    ):
+        args = row["args"]
+        if not isinstance(args, dict):
+            logger.warning("follow-up orfao sem contexto de job: %s", row["origin_turn_id"])
+            continue
+        ctx = {k: v for k, v in args.items() if k not in ("attempt", "delivery_mode")}
+        ultimo = int(row["ultimo_confirmado"] or 0)
+        try:
+            if ultimo >= len(FOLLOWUP_V2_WAITS_SECONDS):
+                defer_once(
+                    follow_up_close_job,
+                    queueing_lock=stable_id("fu-close", row["tenant_id"], row["origin_turn_id"]),
+                    **ctx,
+                )
+            else:
+                _schedule_wake(ctx, ultimo + 1, 0)
+            _rows_exec(_FOLLOWUP_TOCA_SQL, tenant_id=row["tenant_id"], origin_turn_id=row["origin_turn_id"])
+        except Exception:
+            logger.warning("follow-up orfao nao retomado: %s", row["origin_turn_id"], exc_info=True)
+            continue
+        retomados += 1
+        logger.warning("follow-up orfao retomado: %s (proxima tentativa %s)", row["origin_turn_id"], ultimo + 1)
+    return retomados
+
+
+@jobs.periodic(cron="*/30 * * * *")  # Neon free: a cada 30 min (Next: a cada minuto)
 @jobs.task(name="reaper", queue=CRON_QUEUE)
 def reaper(timestamp: int) -> None:
-    for varredura in (despacha_outbox_pendente, retoma_turnos_presos):
+    for varredura in (despacha_outbox_pendente, retoma_turnos_presos, retoma_followups_orfaos):
         try:
             varredura()
         except Exception:

@@ -28,6 +28,10 @@ router = APIRouter(prefix="/v1/webapp")
 logger = logging.getLogger(__name__)
 
 SEND_MAX_BODY_BYTES = 32_768
+CATALOG_MAX_ITEMS = 200
+CATALOG_CONTENT_MAX_CHARS = 20_000
+# Ordem fixa das categorias do catalogo; as demais vem depois, em ordem alfabetica.
+CATALOG_CATEGORY_ORDER = ("empresa", "especialista", "exame", "vacina", "promo", "politica")
 HIDE_MAX_EVENTS = 100
 
 
@@ -257,4 +261,53 @@ async def get_stats(request: Request, tenant_id: str) -> dict:
             "totalClients": len(clients),
         },
         "activity": activity,
+    }
+
+
+# Somente leitura. `persuasao:*` e texto de venda e nunca entra no catalogo.
+_CATALOG_CATEGORIES_SQL = """
+    /* webapp.catalog.categories */
+    SELECT split_part(chave, ':', 1) AS id, count(*) AS total, max(updated_at) AS atualizado_em
+    FROM genius_next.knowledge
+    WHERE tenant_id = :tenant_id AND chave NOT LIKE 'persuasao:%'
+    GROUP BY 1
+"""
+
+_CATALOG_ITEMS_SQL = """
+    /* webapp.catalog.items */
+    SELECT chave, split_part(chave, ':', 1) AS categoria, titulo,
+           left(conteudo, :content_max) AS conteudo, updated_at
+    FROM genius_next.knowledge
+    WHERE tenant_id = :tenant_id AND chave NOT LIKE 'persuasao:%'
+    ORDER BY array_position(CAST(:order AS text[]), split_part(chave, ':', 1)) NULLS LAST,
+             split_part(chave, ':', 1), chave
+    LIMIT :item_limit
+"""
+
+
+@router.get("/catalog")
+async def get_catalog(request: Request, tenant_id: str) -> dict:
+    """Catalogo da tenant (genius_next.knowledge sem persuasao:*), so leitura."""
+    _verify(request)
+    cats = fetch_all(_CATALOG_CATEGORIES_SQL, {"tenant_id": tenant_id})
+    rank = {c: i for i, c in enumerate(CATALOG_CATEGORY_ORDER)}
+    cats.sort(key=lambda c: (rank.get(c["id"], len(rank)), c["id"]))
+    rows = fetch_all(
+        _CATALOG_ITEMS_SQL,
+        {
+            "tenant_id": tenant_id,
+            "content_max": CATALOG_CONTENT_MAX_CHARS,
+            "item_limit": CATALOG_MAX_ITEMS,
+            "order": list(CATALOG_CATEGORY_ORDER),
+        },
+    )
+    for r in rows:
+        r["updated_at"] = r["updated_at"].isoformat() if r.get("updated_at") else None
+    stamps = [c["atualizado_em"] for c in cats if c.get("atualizado_em")]
+    return {
+        "tenant_id": tenant_id,
+        "total": sum(int(c["total"]) for c in cats),
+        "atualizado_em": max(stamps).isoformat() if stamps else None,
+        "categorias": [{"id": c["id"], "total": int(c["total"])} for c in cats],
+        "items": rows,
     }

@@ -240,7 +240,7 @@ def is_trivial_message(text: str) -> bool:
     """
     # 23/out/2026: "?" e emoji de duvida SAO a pergunta do paciente, nao ruido. Antes
     # o texto normalizado ficava vazio e o turno era suprimido sem a Julia ler (9 de 20
-    # conversas abertas do Kyrios com a ultima fala do paciente sem resposta).
+    # conversas abertas da clínica com a ultima fala do paciente sem resposta).
     if _PERGUNTA_ISOLADA.search(text):
         return False
     normalizado = _normalize(text)
@@ -456,6 +456,36 @@ def is_deferral_or_closing(text: str) -> bool:
     if re.search(r"\b(?:quanto|qual|quais|tem vaga|tem horario|quero marcar|como (?:faco|marco))\b", normalizado):
         return False
     return bool(_ADIAMENTO.search(normalizado)) or is_objection(text)
+
+
+# 06/nov/2026 (chairman): so RECUSA FIRME encerra o follow-up. "Vou pensar", "depois eu vejo" e
+# objecao (longe, caro, sem tempo) continuam com insistencia leve; "agora nao", "nao tenho interesse"
+# e opt-out ("nao me manda mais") encerram com educacao.
+_RECUSA_FIRME = re.compile(
+    r"\b(?:"
+    r"(?:agora|no momento|por enquanto) nao"
+    r"|nao e (?:o )?momento"
+    r"|agora nao e (?:a )?hora"
+    r"|nao e (?:a )?hora ainda"
+    r"|nao tenho interesse|sem interesse|nao me interessa"
+    r"|nao quero|nao vou (?:querer|fazer|marcar)"
+    r")\b"
+)
+
+
+def is_refusal(text: str) -> bool:
+    """Recusa firme ("agora não", "não tenho interesse", "não me manda mais"): o follow-up encerra.
+
+    Adiamento ("vou pensar"), objecao e pergunta nao sao recusa: a conversa segue.
+    """
+    if not text or not text.strip():
+        return False
+    normalizado = _normalize(text)
+    if not normalizado or _e_pergunta(text, normalizado):
+        return False
+    if any(pattern.search(normalizado) for pattern in _OPT_OUT_PATTERNS):
+        return True
+    return bool(_RECUSA_FIRME.search(normalizado))
 
 
 def is_trivial_no_reply(text: str) -> bool:

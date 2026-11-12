@@ -2464,16 +2464,66 @@ _STATUS_CLIENT_APPLY_SQL = text(
     WHERE c.tenant_id = :tenant_id
       AND c.phone = :phone
       AND NOT EXISTS (
+          -- 11/nov/2026 (alerta sales_status_classificador): o guarda antigo
+          -- comparava a sequencia do audit novo com a maior sequencia gravada do
+          -- mesmo phone, mas a sequencia e POR CONVERSA e reinicia quando a
+          -- conversa/instancia e recriada (instancia 'genius' religada em 02/nov).
+          -- Com audits antigos do mesmo phone ate a seq 103, todo audit novo era
+          -- "stale", o job falhava com ClientStateMissing e o rollback descartava
+          -- a propria linha do audit — turno ficava sem auditoria. A ordem real
+          -- entre turnos e turns.created_at (monotona entre epocas e entre
+          -- instancias do mesmo phone): so pula o apply quando o audit de um
+          -- turno MAIS RECENTE ja existe.
           SELECT 1
           FROM genius_next.status_audits newer
+          JOIN genius_next.turns nt
+            ON nt.tenant_id = newer.tenant_id AND nt.id = newer.turn_id
           WHERE newer.tenant_id = :tenant_id
             AND newer.phone = :phone
-            AND newer.source_sequence > :source_sequence
+            AND nt.created_at > (
+                SELECT this_turn.created_at
+                FROM genius_next.turns this_turn
+                WHERE this_turn.tenant_id = :tenant_id
+                  AND this_turn.id = :turn_id
+            )
       )
     RETURNING c.phone
     """
 )
 
+
+# 11/nov/2026: diagnostico do ramo applied is None — clients sem linha
+# (anomalia de integridade, merece destaque em log) ou audit de turno mais novo
+# ja aplicado (corrida legitima de jobs, benigna). O guarda e o MESMO da
+# _STATUS_CLIENT_APPLY_SQL, por turns.created_at: a sequencia por conversa
+# reinicia quando a conversa/instancia e recriada e nao serve de ordem entre
+# epocas.
+_STATUS_APPLY_SKIP_SQL = text(
+    """
+    /* status.apply_skip_diag */
+    SELECT CASE
+        WHEN NOT EXISTS (
+            SELECT 1 FROM genius_next.clients c
+            WHERE c.tenant_id = :tenant_id AND c.phone = :phone
+        ) THEN 'clients_ausente'
+        WHEN EXISTS (
+            SELECT 1
+            FROM genius_next.status_audits newer
+            JOIN genius_next.turns nt
+              ON nt.tenant_id = newer.tenant_id AND nt.id = newer.turn_id
+            WHERE newer.tenant_id = :tenant_id
+              AND newer.phone = :phone
+              AND nt.created_at > (
+                  SELECT this_turn.created_at
+                  FROM genius_next.turns this_turn
+                  WHERE this_turn.tenant_id = :tenant_id
+                    AND this_turn.id = :turn_id
+              )
+        ) THEN 'turno_mais_novo_ja_aplicado'
+        ELSE 'desconhecido'
+    END
+    """
+)
 
 def _record_status_evidence(
     session: Session, *, tenant_id: str, turn_id: str, evidence: dict[str, Any]
@@ -2518,6 +2568,15 @@ def apply_status_with_session(
     The unique turn key makes job retries idempotent.  The insert happens
     before the client update so any insert failure prevents domain mutation;
     the surrounding SERIALIZABLE transaction rolls both operations back.
+
+    11/nov/2026: o apply em clients que casa zero linhas NAO falha mais o
+    job. Audit de turno mais novo (ordem real = turns.created_at; a sequencia
+    por conversa reinicia quando a conversa/instancia e recriada) ou clients
+    sem linha apenas pulam o apply: a linha do audit fica gravada como
+    evidencia e o job termina ok, em vez de falhar sem retry e descartar o
+    proprio audit no rollback. Retorno: True quando um audit novo foi gravado
+    (apply aplicado ou pulado), False quando o audit ja existia (idempotencia
+    de replay).
     """
     if not tenant_id or not turn_id or not phone:
         raise ValueError("status audit identity is required")
@@ -2557,7 +2616,6 @@ def apply_status_with_session(
             "tenant_id": tenant_id,
             "turn_id": turn_id,
             "phone": phone,
-            "source_sequence": source_sequence,
             "customer_status": values["customer_status"],
             "agent_commitment": values.get("agent_commitment"),
             "confidence": values.get("confidence", 0.0),
@@ -2566,27 +2624,22 @@ def apply_status_with_session(
         },
     ).scalar_one_or_none()
     if applied is None:
-        existe = session.execute(
-            _CLIENT_EXISTS_SQL, {"tenant_id": tenant_id, "phone": phone}
+        # 11/nov/2026: apply sem linha NAO e mais falha de job. Antes o
+        # ClientStateMissing rolava a transacao SERIALIZABLE e descartava a
+        # propria linha do audit (job sem retry = perda definitiva) — foi o que
+        # abriu o alerta sales_status_classificador. A linha do audit e a
+        # evidencia por turno: fica gravada; o apply em clients e derivado e
+        # pode ser pulado com seguranca.
+        motivo = session.execute(
+            _STATUS_APPLY_SKIP_SQL,
+            {"tenant_id": tenant_id, "phone": phone, "turn_id": turn_id},
         ).scalar_one_or_none()
-        if existe is None:
-            raise ClientStateMissing("trusted client row does not exist")
-        # Auditoria superada: o mesmo telefone ja tem uma auditoria de sequencia maior (a conversa avancou
-        # enquanto este job esperava na fila). A auditoria fica registrada; o estado do cliente nao volta.
-        # Antes isto levantava erro e o job aparecia como falha no Procrastinate (11/nov/2026).
-        return False
+        logger.warning(
+            "status audit %s: apply em clients pulado (%s); linha do audit preservada",
+            turn_id,
+            motivo or "desconhecido",
+        )
     return True
-
-
-_CLIENT_EXISTS_SQL = text(
-    """
-    /* client.exists */
-    SELECT 1
-    FROM genius_next.clients
-    WHERE tenant_id = :tenant_id
-      AND phone = :phone
-    """
-)
 
 
 _INSERT_CONVERSATION_FACT_SQL = text(
