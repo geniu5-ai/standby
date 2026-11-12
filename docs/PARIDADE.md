@@ -84,7 +84,7 @@ inclui os `README.md` dentro de `app/`: editar um só de um lado conta como dive
 
 | Situação | Arquivos | Status |
 |---|---|---|
-| Diferentes | `app/main.py`, `app/observability.py`, `app/status/audit.py`, `app/webapp/router.py` | **ainda não analisados um a um**: investigar antes de dizer "paridade total" |
+| Diferentes (deliberado) | `app/main.py` (rotas de wake/vigia e do conector), `app/jobs.py` (conninfo direto sem `-pooler`), `app/durable/followup.py` (SQL de follow-up por conversa, ainda sem espelho no Next), `app/durable/connector_relay.py`, `app/failover.py`, `app/qstash_auth.py`, `tests/conftest.py` | só o que é do Standby; o resto de `app/` foi espelhado em 12/nov/2026 |
 | Só no Next | `app/curator/*`, `app/embed/main.py` | diferença deliberada (sem sidecar nem curadoria no Render) |
 | Só no Standby | `app/wake.py`, `app/qstash_auth.py`, `app/failover.py`, `app/ingress/connector.py`, `app/durable/connector_relay.py`, `connectors/wa-bridge/` | diferença deliberada (acordam o worker no Render free: QStash; vigia da VPS 002 em modo alerta; conector de gateway) |
 | Idênticos e sensíveis a mudança | `app/durable/followup.py`, `app/status/rules.py`, `app/reply/llm.py`, `app/reply/prompt_profiles.py` | o patch do follow-up de 03/nov entrou nos quatro |
@@ -110,3 +110,4 @@ Linha nova a cada espelhamento. O detalhe da armadilha fica no `TRAPS.md` do lad
 Prompt e catálogo no Neon são os de um dump: confira as versões ativas e as campanhas contra o Next (`TRAPS` #18),
 o env próprio do Render (`TRAPS` #19) e os critérios do failover (`docs/OPERACAO.md` e `docs/WAKE.md` do Standby).
 Ligar o `live` é decisão do chairman.
+| 12/nov/2026 | Espelho completo do `app/`: learning, turn_judge, ordem_da_venda (desligados por padrão no Render), follow-up (só recusa firme encerra o ciclo, sem teto por contato), persistência de status, crons a cada 30 min | `geniu5-ai/standby#32` | `test_status_superada.py` removido (substituído pela persistência do Next); `test_campanhas.py` mantém os skips do Standby |
