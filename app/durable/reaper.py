@@ -162,7 +162,7 @@ def retoma_turnos_presos() -> int:
     return retomados
 
 
-@jobs.periodic(cron="*/10 * * * *")  # Neon free: a cada 10 min
+@jobs.periodic(cron="*/30 * * * *")  # Neon free: a cada 30 min
 @jobs.task(name="reaper", queue=CRON_QUEUE)
 def reaper(timestamp: int) -> None:
     for varredura in (despacha_outbox_pendente, retoma_turnos_presos):

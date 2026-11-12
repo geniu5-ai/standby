@@ -55,10 +55,13 @@ TURN_PRIORITY_FOLLOWUP = 0
 # Neon free: qualquer consulta reinicia o timer de 5 min para suspender o compute, e o plano grátis
 # tem 100 CU-h/mês. Por isso o polling é lento: a fila acorda por NOTIFY (conexão direta, sem -pooler);
 # o polling é só a rede de segurança. Não baixe estes números sem refazer a conta de CU-h.
+# Neon grátis suspende após 5 min sem consulta. Cada poll é uma consulta: com polling curto o banco
+# nunca dorme e estoura os 100 CU-h/mês. A fila acorda por NOTIFY (conexão direta); o poll é só rede de
+# segurança, e por isso é longo. Turno: 60 s de atraso máximo se o NOTIFY falhar.
 WORKERS: dict[str, tuple[int, float]] = {
-    TURN_QUEUE: (16, 5.0),
-    AUX_QUEUE: (6, 30.0),
-    CRON_QUEUE: (2, 60.0),
+    TURN_QUEUE: (16, 60.0),
+    AUX_QUEUE: (6, 300.0),
+    CRON_QUEUE: (2, 600.0),
 }
 JOBS_RETENTION_HOURS = 7 * 24
 # Tarefas que seguram uma cadeia (follow-up, envio, Manager): uma falha de banco ou de rede por um
@@ -151,7 +154,7 @@ async def limpa_jobs_antigos(context: procrastinate.JobContext, timestamp: int) 
     await builtin_tasks.remove_old_jobs(context, max_hours=JOBS_RETENTION_HOURS)
 
 
-@jobs.periodic(cron="*/10 * * * *")
+@jobs.periodic(cron="*/30 * * * *")
 @jobs.task(name="reenfileira_travados", queue=CRON_QUEUE)
 async def reenfileira_travados(timestamp: int) -> None:
     """Job ``doing`` de worker que morreu (deploy, kill -9) volta para a fila.
