@@ -760,7 +760,23 @@ async def control_qstash_wake(request: Request) -> dict[str, Any]:
         url=runtime_settings.QSTASH_WAKE_URL or None,
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    return await _estado_do_wake(runtime_settings, origem="qstash")
+    resultado = await _estado_do_wake(runtime_settings, origem="qstash")
+    _pulso_heartbeat()
+    return resultado
+
+
+def _pulso_heartbeat() -> None:
+    """Avisa o heartbeat do Better Stack que o wake rodou. Opcional (STANDBY_HEARTBEAT_URL); nunca derruba o wake."""
+    import os
+    import urllib.request
+
+    url = os.environ.get("STANDBY_HEARTBEAT_URL", "").strip()
+    if not url:
+        return
+    try:
+        urllib.request.urlopen(url, timeout=5).close()
+    except Exception:
+        logging.getLogger("app.main").warning("heartbeat do wake nao enviado")
 
 
 @app.post("/v1/control/tenant_registry")
