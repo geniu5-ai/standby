@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     )
     # Lista de tenant_id (virgula) onde o handoff automatico (modelo, promocao,
     # guarda de saida) cria marcacao COM prazo e agenda o follow-up -- a lei de
-    # 08/out/2026 (ordem do chairman para a Kyrios).  Vazio = desligado: fora
+    # 08/out/2026 (ordem do chairman para a clínica).  Vazio = desligado: fora
     # da lista o handoff automatico fica com a equipe ate alguem agir e nao
     # agenda follow-up, como antes.  A rota fixa de seguranca (emergencia,
     # medicamento) nunca expira, em nenhum tenant.  O clique Assumir expira em
@@ -100,7 +100,6 @@ class Settings(BaseSettings):
     HANDOFF_FALLBACK_EVOLUTION_INSTANCE: str | None = Field(
         default=None, min_length=1, max_length=128
     )
-    DEEPSEEK_API_KEY: SecretStr | None = None
     # Exa (web search) — opt-in por tenant via flag `web_search` no
     # tenant_registry (migration-069). Cada busca = ~3k tokens de entrada +
     # ida ao provedor; so para perguntas que exigem dado externo.
@@ -113,6 +112,27 @@ class Settings(BaseSettings):
     OMNIROUTE_API_KEY: SecretStr | None = None
     OMNIROUTE_BASE_URL: str = "https://omni.geniuslabs.pro/v1"
     OMNIROUTE_MODEL: str = "gpt-pool"
+    # Juiz por turno (app/reply/turn_judge.py). Assincrono, amostrado, desligado por padrao.
+    TURN_JUDGE_ENABLED: bool = False
+    TURN_JUDGE_SAMPLE_RATE: float = Field(default=0.2, ge=0.0, le=1.0)
+    TURN_JUDGE_THRESHOLD: float = Field(default=0.7, ge=0.0, le=1.0)
+    TURN_JUDGE_MODEL: str = "gpt-pool"
+    # Lista explicita (separada por virgula). Vazio = nenhum tenant, mesmo com TURN_JUDGE_ENABLED.
+    TURN_JUDGE_TENANTS: str = ""
+    # Licoes aprovadas no contexto do agente (app/learning). Vazio = nenhum tenant (nunca "todos").
+    LESSONS_IN_AGENT_TENANTS: str = ""
+    # Auto-aprendizado (app/learning/). Tudo nasce desligado; ligar e decisao humana.
+    # LEARNING_ENABLED: o tick e a rodada so agem com isto ligado.
+    # LEARNING_DRY_RUN: com True a rodada reflete e audita, mas nao grava insight.
+    LEARNING_ENABLED: bool = False
+    LEARNING_DRY_RUN: bool = True
+    LEARNING_TENANTS: str = ""  # lista separada por virgula; vazio = nenhum tenant (nunca "todos")
+    LEARNING_WINDOW_HOURS: int = Field(default=24, ge=1, le=24 * 14)
+    LEARNING_MAX_OUTCOMES: int = Field(default=60, ge=5, le=300)
+    LEARNING_MIN_OUTCOMES: int = Field(default=8, ge=1, le=100)
+    LEARNING_MODEL: str = "gpt-pool"
+    LEARNING_TIMEOUT_SECONDS: float = Field(default=90.0, gt=0, le=300.0)
+    LEARNING_MAX_TOKENS: int = Field(default=4096, ge=256, le=16384)
     CONFIDENT_API_KEY: str | None = None
     # Dedicated status-audit LLM endpoint.  When absent, the audit falls back
     # to the OmniRoute settings above (never a hardcoded provider/model).
@@ -149,6 +169,8 @@ class Settings(BaseSettings):
     # handoff_promotion.py). Lista de tenant_id (virgula); vazio = desligado.
     # So texto de configuracao, NAO SecretStr.
     HANDOFF_PROMOTE_TENANTS: str = ""
+    # Ordem da venda (acolher, engajar, depois o preco): travas no guardrail, por tenant.
+    ORDEM_DA_VENDA_TENANTS: str = ""
     # --- Manager (task #8801, branch feat/agente-proativo) ----------
     # Tudo abaixo e' DESLIGADO por padrao: lista vazia = nenhum tenant roda
     # promessa duravel (A), rota de raciocinio (B), follow-up de assistencia (C)
@@ -159,7 +181,7 @@ class Settings(BaseSettings):
     MANAGER_AGENT_TENANTS: str = Field(default="", validation_alias=_legado("MANAGER_AGENT_TENANTS"))
     # Modelo da rota densa (B). Mesmo provedor do turno (OMNIROUTE_BASE_URL),
     # so um degrau acima do flash — decisao reversivel de uma linha de env.
-    MANAGER_REASONING_MODEL: str = Field(default="deepseek-v4-pro", validation_alias=_legado("MANAGER_REASONING_MODEL"))
+    MANAGER_REASONING_MODEL: str = Field(default="gpt-pool", validation_alias=_legado("MANAGER_REASONING_MODEL"))
     MANAGER_REASONING_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=60.0, validation_alias=_legado("MANAGER_REASONING_TIMEOUT_SECONDS"))
     # Teto de tokens de SAIDA por chamada densa: e' o teto de custo direto.
     MANAGER_REASONING_MAX_TOKENS: int = Field(default=1_200, ge=128, le=8_192, validation_alias=_legado("MANAGER_REASONING_MAX_TOKENS"))
@@ -217,13 +239,6 @@ class Settings(BaseSettings):
     # deploy/ops/medir_triagem.py antes de desligar em producao.
     MANAGER_TRIAGE_THINKING: bool = Field(default=False, validation_alias=_legado("MANAGER_TRIAGE_THINKING"))
     # Temperatura do reply agent. None = default do provedor (comportamento atual).
-    # Follow-up (15/out/2026): teto de follow-ups confirmados por contato em 24 h,
-    # somando ciclos diferentes (cada resposta do paciente abria um ciclo novo).
-    FOLLOWUP_MAX_PER_PHONE_24H: int = Field(default=3, ge=0, le=20)
-    # 03/nov/2026: teto em 7 dias, somando todos os ciclos do contato (5 = um ciclo
-    # cheio de 3 tentativas mais 2 de um segundo ciclo). Contido no abrir do ciclo
-    # e a cada despertar/envio, entao vale tambem para jobs ja agendados.
-    FOLLOWUP_MAX_PER_PHONE_7D: int = Field(default=5, ge=0, le=50)
     # Envio de MODELO (template) da Meta — 18/out/2026. A única mensagem que o
     # WhatsApp aceita fora da janela de 24 h; texto livre ali devolve 131047.
     # Desligado por padrão: ligar exige a flag E o tenant na lista (mesmo
@@ -308,7 +323,8 @@ class Settings(BaseSettings):
     # Cada busca e uma ida ao provedor + ~3k tokens de entrada: 1 por turno.
     WEB_SEARCH_MAX_CONSULTAS: int = Field(default=1, ge=0, le=6)
     # Model string nativa do pydantic-ai.  String, nao instancia.
-    REPLY_AGENT_MODEL: str = "deepseek:deepseek-v4-flash"
+    # Mesmo valor que roda em producao (/etc/genius-next.env). Sem DeepSeek: 05/nov/2026.
+    REPLY_AGENT_MODEL: str = "openai-chat:gpt-4o-mini"
     OUTPUT_MAX_TOKENS: int = Field(default=1600, ge=1, le=4096)
     # Matches the legacy n8n Spliter's proven values (MAX_PARTS=5,
     # TARGET_CHARS=115) -- the previous 220/3 defaults were a guess that
@@ -418,6 +434,9 @@ class Settings(BaseSettings):
     def _tenant_in(lista: str, tenant_id: str) -> bool:
         tenants = {tenant.strip() for tenant in lista.split(",") if tenant.strip()}
         return "*" in tenants or tenant_id in tenants
+
+    def ordem_da_venda_enabled(self, tenant_id: str) -> bool:
+        return self._tenant_in(self.ORDEM_DA_VENDA_TENANTS, tenant_id)
 
     def manager_agenda_enabled(self, tenant_id: str) -> bool:
         return self._tenant_in(self.MANAGER_AGENDA_TENANTS, tenant_id)

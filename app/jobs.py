@@ -11,6 +11,7 @@ Filas (cada uma com o seu worker dentro do servico, ``jobs_worker`` no lifespan)
   ao contrario do DBOS).
 - ``aux``: midia, auditoria de status, resumo, Rescue e Manager.
 - ``cron``: relogios (``@jobs.periodic``, UTC, cinco campos) e os backups.
+- ``learn``: auto-aprendizado (``app/learning/``): reflexao sobre turnos ja resolvidos, fora do caminho do cliente.
 
 Um cron e um ``@jobs.periodic`` em cima de um ``@jobs.task``: a cada minuto cheio o worker insere
 o job do horario e o ``UNIQUE (task_name, periodic_id, defer_timestamp)`` de
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 CRON_QUEUE = "cron"
 TURN_QUEUE = "turn"
 AUX_QUEUE = "aux"
+LEARN_QUEUE = "learn"
 # No Procrastinate MAIOR numero sai primeiro. O follow-up nunca passa na frente do paciente.
 TURN_PRIORITY_LIVE = 10
 TURN_PRIORITY_FOLLOWUP = 0
@@ -62,6 +64,8 @@ WORKERS: dict[str, tuple[int, float]] = {
     TURN_QUEUE: (16, 1800.0),
     AUX_QUEUE: (6, 1800.0),
     CRON_QUEUE: (2, 1800.0),
+    # Aprendizado (espelho do Next): baixa concorrencia, mesmo poll lento do Standby.
+    LEARN_QUEUE: (2, 1800.0),
 }
 JOBS_RETENTION_HOURS = 7 * 24
 # Tarefas que seguram uma cadeia (follow-up, envio, Manager): uma falha de banco ou de rede por um
@@ -72,6 +76,7 @@ _SHUTDOWN_GRACE_S = 10.0
 # Modulos que registram tasks; o worker os importa ao abrir.
 TASK_MODULES = [
     "app.agent.lesson_scheduler",
+    "app.learning.jobs",
     "app.agent.lead_summary",
     "app.durable.pendentes",
     "app.durable.manager_tick",

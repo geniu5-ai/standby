@@ -1,6 +1,6 @@
 """Extrator de fatos DEPOIS da resposta (24/out/2026): fora do caminho do paciente.
 
-Pedir os fatos na mesma chamada da Julia piorou as regras duras do Kyrios (medicao de 24/out). Aqui um
+Pedir os fatos na mesma chamada da Julia piorou as regras duras da clínica (medicao de 24/out). Aqui um
 modelo separado le a fala do paciente e a resposta ja enviada e devolve os fatos. Tolerante: qualquer
 defeito (JSON ruim, tipo desconhecido, falha de rede) vira lista vazia; nunca levanta.
 """

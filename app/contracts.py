@@ -614,6 +614,27 @@ class TenantRegistryUpsertResult(_InternalModel):
     enabled: bool
 
 
+class TenantRegistrySetEnabledRequest(_InternalModel):
+    """Authenticated enable/disable of one existing (provider, instance) mapping.
+
+    ``tenant_id`` is the organization of the app session that signed the call
+    (never copied from a provider webhook body); it must match the row's owner.
+    """
+
+    provider: str = Field(min_length=1, max_length=64)
+    instance: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:@-]+$")
+    tenant_id: str = Field(min_length=1, max_length=128)
+
+
+class TenantRegistrySetEnabledResult(_InternalModel):
+    """Durable result of an enable/disable; ``unchanged`` when already in that state."""
+
+    outcome: Literal[
+        "enabled", "disabled", "unchanged", "not_found", "instance_owned_by_other_tenant"
+    ]
+    enabled: bool
+
+
 
 class FollowUpDeliveryContext(_InternalModel):
     """Trusted origin required to re-check a synthetic follow-up at send time."""

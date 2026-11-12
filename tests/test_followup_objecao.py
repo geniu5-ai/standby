@@ -170,13 +170,22 @@ def _continua(**kw: Any) -> bool:
     return fu._should_continue(session, "tenant-a", "5511999999999", 7, "turn-1")
 
 
-@pytest.mark.parametrize("fala", ["Vix", "Muito longe", "Ok obrigada", "Tá caro"])
-def test_ciclo_para_quando_ultima_fala_e_objecao_ou_despedida(fala: str) -> None:
+@pytest.mark.parametrize("fala", ["Ok obrigada", "Agora não", "Não tenho interesse", "Não quero", "Não me manda mais"])
+def test_ciclo_para_so_com_recusa_firme_ou_despedida(fala: str) -> None:
     assert _continua(last_inbound_text=[fala]) is False
 
 
-def test_ciclo_para_com_objecao_na_fala_anterior() -> None:
-    assert _continua(last_inbound_text=["Ok", "Muito longe"]) is False
+@pytest.mark.parametrize(
+    "fala", ["Vix", "Muito longe", "Tá caro", "Vou pensar", "Depois eu vejo", "Sem pressa", "Semana que vem eu vejo"]
+)
+def test_ciclo_segue_com_indecisao_adiamento_e_objecao(fala: str) -> None:
+    """06/nov/2026 (chairman): quem esta indeciso, vai pensar ou objetou recebe insistencia leve."""
+    assert _continua(last_inbound_text=[fala]) is True
+
+
+def test_ciclo_segue_com_objecao_na_fala_anterior_e_para_com_recusa_na_anterior() -> None:
+    assert _continua(last_inbound_text=["Ok", "Muito longe"]) is True
+    assert _continua(last_inbound_text=["Ok", "Agora não"]) is False
 
 
 def test_despedida_so_vale_na_ultima_fala() -> None:
@@ -190,28 +199,21 @@ def test_onde_fica_nao_para_o_ciclo() -> None:
     assert _continua(last_inbound_text=["Onde fica"]) is True
 
 
-def test_teto_de_7_dias_por_contato() -> None:
-    """Defaults: 24 h = 3, 7 dias = 5 (somando todos os ciclos do contato)."""
-    from app.settings import get_settings
-
-    cap_7d = get_settings().FOLLOWUP_MAX_PER_PHONE_7D
-    assert cap_7d == 5
-    assert _continua(sent_24h=0, sent_7d=cap_7d) is False
-    assert _continua(sent_24h=0, sent_7d=cap_7d - 1) is True
-    assert _continua(sent_24h=3, sent_7d=3) is False  # teto de 24 h continua valendo
-
-
-def test_guarda_de_abertura_recusa_objecao_despedida_e_tetos() -> None:
+def test_guarda_de_abertura_recusa_so_recusa_firme_e_despedida() -> None:
     def motivo(**kw: Any) -> str | None:
         session = _FollowupSession(client=_OPEN_CLIENT, **kw)
         return fu.motivo_para_nao_abrir_ciclo(session, "tenant-a", "5511999999999")
 
-    assert motivo(last_inbound_text=["Muito longe"]) == fu.MOTIVO_FALA_ENCERRA
-    assert motivo(last_inbound_text=["Vix"]) == fu.MOTIVO_FALA_ENCERRA
+    assert motivo(last_inbound_text=["Agora não"]) == fu.MOTIVO_FALA_ENCERRA
+    assert motivo(last_inbound_text=["Não tenho interesse"]) == fu.MOTIVO_FALA_ENCERRA
     assert motivo(last_inbound_text=["Ok obrigada"]) == fu.MOTIVO_FALA_ENCERRA
-    assert motivo(last_inbound_text=["Depois eu vejo"]) == fu.MOTIVO_FALA_ENCERRA
-    assert motivo(last_inbound_text=["Quero saber mais sobre vacina"], sent_24h=3) == fu.MOTIVO_TETO_24H
-    assert motivo(last_inbound_text=["Quero saber mais sobre vacina"], sent_7d=5) == fu.MOTIVO_TETO_7D
+    # indecisao, adiamento e objecao abrem ciclo (insistencia leve)
+    assert motivo(last_inbound_text=["Muito longe"]) is None
+    assert motivo(last_inbound_text=["Vix"]) is None
+    assert motivo(last_inbound_text=["Depois eu vejo"]) is None
+    assert motivo(last_inbound_text=["Vou pensar"]) is None
+    # Sem teto de envios por contato (removido em 05/nov/2026): quem perguntou algo abre ciclo.
+    assert motivo(last_inbound_text=["Quero saber mais sobre vacina"], sent_24h=3, sent_7d=9) is None
     assert motivo(last_inbound_text=["Onde fica"]) is None
     assert motivo(last_inbound_text=["Quero saber mais sobre vacina"]) is None
 
@@ -257,7 +259,7 @@ def _abre_ciclo(session: _LifecycleSession) -> bool:
 
 
 def test_abertura_registra_ciclo_stopped_com_motivo_e_nao_agenda() -> None:
-    session = _LifecycleSession(last_inbound_text=["Muito longe"])
+    session = _LifecycleSession(last_inbound_text=["Agora não"])
     assert _abre_ciclo(session) is False
     assert len(session.inserts) == 1
     sql, params = session.inserts[0]

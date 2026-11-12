@@ -36,7 +36,7 @@ TIMEOUT_SECONDS = 10.0
 ERROR_MAX_CHARS = 160
 
 _TENANT_LABELS = {
-    "6f4d3510-b5bc-4c19-9d44-2679f9dbfdb9": "Kyrios",
+    "6f4d3510-b5bc-4c19-9d44-2679f9dbfdb9": "Clinic",
     "d0b00bad-814d-4be4-835c-5762c9ac374d": "teste",
 }
 

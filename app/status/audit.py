@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -57,7 +56,7 @@ SpeakerRole = Literal["customer", "assistant"]
 # assistente com o prefixo "[equipe] " (fala humana do app), nunca de StatusInput.
 JudgeRole = Literal["customer", "assistant", "equipe"]
 
-EMBED_SCORE_URL = os.environ.get("EMBED_SCORE_URL", "http://127.0.0.1:8721/score")
+EMBED_SCORE_URL = "http://127.0.0.1:8721/score"
 # Calibrado com 25 casos rotulados a mao contra o genius-embed (22/ago/2026).
 # O e5-small comprime TUDO na faixa 0.81-0.98, entao o limiar 0.75 original nao
 # filtrava nada: "Oi, tudo bem?" batia 0.886 em "loss" e marcava lead vivo como
@@ -525,7 +524,7 @@ def classify_status(
         )
 
     # 31/out/2026: no comeco da conversa (o chamador conta no banco) o juiz nunca saiu de open
-    # (Kyrios, 30 dias: 0 de 106 nos dois primeiros julgamentos). A regra acima ja rodou, entao
+    # (clínica, 30 dias: 0 de 106 nos dois primeiros julgamentos). A regra acima ja rodou, entao
     # uma recusa explicita no primeiro turno continua virando loss; com pista de agendamento
     # o juiz roda mesmo assim.
     if (

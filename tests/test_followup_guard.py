@@ -489,8 +489,8 @@ def test_send_text_turn_starts_status_audit_after_delivery(
 _OPEN_CLIENT = {"status": "open", "last_intent": "reply", "automation_state": "open"}
 
 
-def test_continuation_stops_after_patient_deferral() -> None:
-    """15/out/2026: "sem pressa / quando o dinheiro entrar" encerra o ciclo."""
+def test_continuation_keeps_going_after_patient_deferral() -> None:
+    """06/nov/2026 (chairman): adiamento ("sem pressa", "quando o dinheiro entrar") NAO encerra o ciclo."""
     from app.durable import followup
 
     session = _FollowupSession(
@@ -498,22 +498,28 @@ def test_continuation_stops_after_patient_deferral() -> None:
         lifecycle_state="scheduled",
         last_inbound_text="Tá bem, quando o dinheiro entrar eu vou",
     )
-    assert followup._should_continue(session, "tenant-a", "5511999999999", 7, "turn-1") is False
-
-
-def test_continuation_stops_at_daily_cap_per_contact() -> None:
-    """15/out/2026: teto de follow-ups confirmados por contato em 24 h."""
-    from app.durable import followup
-
-    session = _FollowupSession(client=_OPEN_CLIENT, lifecycle_state="scheduled", sent_24h=3)
-    assert followup._should_continue(session, "tenant-a", "5511999999999", 7, "turn-1") is False
-    session = _FollowupSession(client=_OPEN_CLIENT, lifecycle_state="scheduled", sent_24h=2)
     assert followup._should_continue(session, "tenant-a", "5511999999999", 7, "turn-1") is True
 
 
+def test_continuation_stops_with_firm_refusal() -> None:
+    """So recusa firme ("agora nao", "nao tenho interesse") encerra o ciclo."""
+    from app.durable import followup
 
-def test_continuation_stops_when_deferral_is_followed_by_ok() -> None:
-    """16/out: "Depois falo com você" e depois "Ok" continua sendo adiamento."""
+    for fala in ("Agora não", "Não tenho interesse"):
+        session = _FollowupSession(client=_OPEN_CLIENT, lifecycle_state="scheduled", last_inbound_text=fala)
+        assert followup._should_continue(session, "tenant-a", "5511999999999", 7, "turn-1") is False
+
+
+def test_continuation_has_no_cap_per_contact() -> None:
+    """Commit 649358a do Next: o teto de envios por contato (24 h e 7 dias) foi removido."""
+    from app.durable import followup
+
+    session = _FollowupSession(client=_OPEN_CLIENT, lifecycle_state="scheduled", sent_24h=99, sent_7d=99)
+    assert followup._should_continue(session, "tenant-a", "5511999999999", 7, "turn-1") is True
+
+
+def test_continuation_keeps_going_when_deferral_is_followed_by_ok() -> None:
+    """"Depois falo com você" e depois "Ok" continua sendo adiamento, e adiamento nao encerra mais."""
     from app.durable import followup
 
     session = _FollowupSession(
@@ -521,4 +527,4 @@ def test_continuation_stops_when_deferral_is_followed_by_ok() -> None:
         lifecycle_state="scheduled",
         last_inbound_text=["Ok", "Depois falo com você"],
     )
-    assert followup._should_continue(session, "tenant-a", "5511999999999", 7, "turn-1") is False
+    assert followup._should_continue(session, "tenant-a", "5511999999999", 7, "turn-1") is True

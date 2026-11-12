@@ -26,6 +26,7 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai_harness.guardrails import GuardrailResult, OutputGuardrail, detectors
 
+from app.reply.ordem_da_venda import INSTRUCAO_POR_VIOLACAO, violacao_da_ordem
 from app.reply.price_guard import valores_fora_da_entrada
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,23 @@ def valores_confirmados(ctx: RunContext[Any], output: Any) -> GuardrailResult:
     return GuardrailResult.block(VALOR_BLOQUEADO)
 
 
+def ordem_da_venda(ctx: RunContext[Any], output: Any) -> GuardrailResult:
+    """Acolher, engajar, depois o preco: refaz uma vez; se insistir, deixa passar (nunca bloqueia)."""
+    deps = ctx.deps
+    if not getattr(deps, "vigiar_ordem", False) or getattr(output, "action", None) != "send_text":
+        return GuardrailResult.allow()
+    violacao = violacao_da_ordem(
+        output.text, getattr(deps, "turno_do_cliente", ""), getattr(deps, "historico", ())
+    )
+    if violacao is None:
+        return GuardrailResult.allow()
+    if ctx.retry < VALOR_RETRIES:
+        logger.info("guardrail de saida: %s em %s; modelo refaz", violacao, getattr(deps, "tenant_id", "?"))
+        return GuardrailResult.retry(INSTRUCAO_POR_VIOLACAO[violacao])
+    logger.warning("guardrail de saida: %s persistiu em %s; resposta mantida", violacao, getattr(deps, "tenant_id", "?"))
+    return GuardrailResult.allow()
+
+
 def guardrail_de_saida() -> OutputGuardrail:
     """Cadeia na ordem: segredo reescrito antes de conferir valores."""
-    return OutputGuardrail(guard=[sem_segredos, valores_confirmados])
+    return OutputGuardrail(guard=[sem_segredos, valores_confirmados, ordem_da_venda])

@@ -1,7 +1,7 @@
 """Fatos da conversa derivados por REGRA, sem LLM (24/out/2026).
 
 Entradas que o status_workflow ja tem: a fala do paciente, a resposta enviada e a acao (send_text/handoff).
-Pedir fatos na resposta da Julia piorou as regras duras do Kyrios (1/200 -> 4/195) e o extrator por LLM
+Pedir fatos na resposta da Julia piorou as regras duras da clínica (1/200 -> 4/195) e o extrator por LLM
 errou o que mais importa ("ok" virou pergunta aberta). Regex e deterministico, barato e nao toca o pool.
 Conservador de proposito: na duvida, nenhum fato. "ok", "obrigada" e emoji de aceite nunca geram fato.
 """

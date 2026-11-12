@@ -50,7 +50,7 @@ from app.context.campaigns import (
 from app.reply.llm import _build_system_prompt, _data_atual_negocio, _secret_value
 from app.reply.split import split_human_reply
 from app.settings import get_settings
-from app.status.rules import is_deferral_or_closing, is_farewell, is_objection
+from app.status.rules import is_deferral_or_closing, is_farewell, is_objection, is_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -701,35 +701,6 @@ _LAST_INBOUND_TEXT_SQL = _sql_text(
     """
 )
 
-# Follow-ups confirmados para o contato nas ultimas 24 h, somando ciclos.
-_FOLLOWUPS_24H_SQL = _sql_text(
-    """
-    /* followup.confirmed_last_24h */
-    SELECT count(*)
-    FROM genius_next.follow_up_attempt_receipts AS r
-    JOIN genius_next.follow_up_lifecycles AS l
-      ON l.tenant_id = r.tenant_id AND l.origin_turn_id = r.origin_turn_id
-    WHERE r.tenant_id = :tenant_id AND l.phone = :phone
-      AND r.status = 'confirmed' AND r.recorded_at > now() - interval '24 hours'
-    """
-)
-
-
-# Follow-ups confirmados para o contato nos ultimos 7 dias, somando ciclos.
-# 03/nov/2026: o teto de 24 h sozinho deixava o contato receber 3 mensagens por
-# dia, todo dia, enquanto ele respondesse (cada resposta abria um ciclo novo).
-_FOLLOWUPS_7D_SQL = _sql_text(
-    """
-    /* followup.confirmed_last_7d */
-    SELECT count(*)
-    FROM genius_next.follow_up_attempt_receipts AS r
-    JOIN genius_next.follow_up_lifecycles AS l
-      ON l.tenant_id = r.tenant_id AND l.origin_turn_id = r.origin_turn_id
-    WHERE r.tenant_id = :tenant_id AND l.phone = :phone
-      AND r.status = 'confirmed' AND r.recorded_at > now() - interval '7 days'
-    """
-)
-
 # Ciclo que nao chegou a abrir: fica registrado (stopped + motivo) para auditoria.
 _LIFECYCLE_ENSURE_STOPPED_SQL = _sql_text(
     """
@@ -741,15 +712,8 @@ _LIFECYCLE_ENSURE_STOPPED_SQL = _sql_text(
     """
 )
 
-# Limites (03/nov/2026): ver FOLLOWUP_MAX_PER_PHONE_24H / _7D em app/settings.py.
-# - 24 h: no maximo 3 tentativas confirmadas por contato, somando ciclos.
-# - 7 dias: no maximo 5 (um ciclo cheio de 3 mais 2 de um segundo ciclo).
-# O teto vale na abertura do ciclo (``ensure_follow_up_v2_lifecycle_txn``) e a
-# cada despertar/envio (``_should_continue``), entao jobs ja agendados antes
-# deste deploy tambem sao contidos.
+# 05/nov/2026 (chairman): o teto de envios por contato (24 h e 7 dias) foi removido.
 MOTIVO_FALA_ENCERRA = "fala_do_paciente_encerra"
-MOTIVO_TETO_24H = "teto_24h"
-MOTIVO_TETO_7D = "teto_7d"
 
 
 def _fala_encerra_ciclo(ultimas: list[str]) -> bool:
@@ -760,38 +724,26 @@ def _fala_encerra_ciclo(ultimas: list[str]) -> bool:
     voce" seguido de "Ok" e adiamento); despedida ("ok obrigada") so na ultima:
     quem agradeceu e depois fez uma pergunta nao se despediu.
     """
-    if any(t and is_deferral_or_closing(t) for t in ultimas):
+    # 06/nov/2026 (chairman): so recusa firme encerra; "vou pensar", adiamento e objecao seguem.
+    if any(t and is_refusal(t) for t in ultimas):
         return True
     return bool(ultimas and ultimas[0] and is_farewell(ultimas[0]))
-
-
-def _teto_de_envios_atingido(session: Session, tenant_id: str, phone: str) -> str | None:
-    """Motivo do teto de follow-ups por contato (24 h, depois 7 dias), ou ``None``."""
-    settings = get_settings()
-    params = {"tenant_id": tenant_id, "phone": phone}
-    sent_24h = session.execute(_FOLLOWUPS_24H_SQL, params).scalar_one_or_none() or 0
-    if sent_24h >= settings.FOLLOWUP_MAX_PER_PHONE_24H:
-        return MOTIVO_TETO_24H
-    sent_7d = session.execute(_FOLLOWUPS_7D_SQL, params).scalar_one_or_none() or 0
-    if sent_7d >= settings.FOLLOWUP_MAX_PER_PHONE_7D:
-        return MOTIVO_TETO_7D
-    return None
 
 
 def motivo_para_nao_abrir_ciclo(session: Session, tenant_id: str, phone: str) -> str | None:
     """Por que um ciclo NOVO de follow-up nao deve abrir para este contato, ou ``None``.
 
     03/nov/2026 (incidente "Vix" / "Muito longe"): o ciclo reabria a cada resposta
-    do paciente, mesmo sendo uma objecao ou despedida, e nao havia teto real de
-    mensagens. Agora nao abre ciclo quando a ultima fala do paciente adia,
-    objeta ou se despede, nem quando o contato ja atingiu o teto de 24 h / 7 dias.
+    do paciente, mesmo sendo uma objecao ou despedida. Nao abre ciclo quando a
+    ultima fala do paciente adia, objeta ou se despede. Sem teto de envios por
+    contato (removido em 05/nov/2026).
     """
     ultimas = session.execute(
         _LAST_INBOUND_TEXT_SQL, {"tenant_id": tenant_id, "phone": phone}
     ).scalars().all()
     if _fala_encerra_ciclo(list(ultimas)):
         return MOTIVO_FALA_ENCERRA
-    return _teto_de_envios_atingido(session, tenant_id, phone)
+    return None
 
 
 def _origin_sequence(session: Session, tenant_id: str, turn_id: str) -> int:
@@ -851,11 +803,6 @@ def _should_continue(
         _LAST_INBOUND_TEXT_SQL, {"tenant_id": tenant_id, "phone": phone}
     ).scalars().all()
     if _fala_encerra_ciclo(list(ultimas)):
-        return False
-
-    # 15/out/2026: teto por contato em 24 h, somando ciclos (cada resposta do
-    # paciente abria um ciclo novo de 2 tentativas). 03/nov/2026: e em 7 dias.
-    if _teto_de_envios_atingido(session, tenant_id, phone) is not None:
         return False
 
     client = session.execute(
@@ -1230,6 +1177,75 @@ def _informacoes_da_empresa(session: Session, tenant_id: str, settings: Any) -> 
         return ""
 
 
+class FollowUpDraftIndisponivel(RuntimeError):
+    """Nenhuma rota de LLM respondeu: falha de infraestrutura, nao decisao de nao enviar.
+
+    Sobe ate o job (``RETRY_CADEIA``: 5 tentativas, espera exponencial de 10 s) em vez de gravar o
+    recibo ``stopped``: queda curta do provedor nao pode encerrar o ciclo do paciente (TRAPS #105).
+    """
+
+
+def _follow_up_llm_rotas(
+    settings: Any, temperatura: float, mensagens: list[dict[str, str]]
+) -> list[tuple[str, str, dict[str, str], dict[str, Any]]]:
+    """Rotas do rascunho do follow-up, em ordem: roteador local, depois OmniRoute.
+
+    O roteador local e o mesmo da resposta normal (``OPENAI_BASE_URL`` + chave
+    ``OPENAI_API_KEY``, modelo do ``REPLY_AGENT_MODEL`` sem o prefixo do provedor).
+    Usa ``max_completion_tokens``: o roteador as vezes serve um modelo que recusa
+    ``max_tokens`` com 400. Sem ``OPENAI_BASE_URL`` a rota local nao entra.
+    """
+    import os
+
+    rotas: list[tuple[str, str, dict[str, str], dict[str, Any]]] = []
+    base_local = os.environ.get("OPENAI_BASE_URL", "").strip().rstrip("/")
+    modelo_local = str(getattr(settings, "REPLY_AGENT_MODEL", "") or os.environ.get("REPLY_AGENT_MODEL", ""))
+    modelo_local = modelo_local.split(":", 1)[-1].strip()
+    if base_local and modelo_local:
+        rotas.append(
+            (
+                "roteador-local",
+                f"{base_local}/chat/completions",
+                {
+                    "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
+                    "Content-Type": "application/json",
+                },
+                {
+                    "model": modelo_local,
+                    "temperature": temperatura,
+                    "stream": False,
+                    "max_completion_tokens": settings.OUTPUT_MAX_TOKENS,
+                    "response_format": {"type": "json_object"},
+                    "messages": mensagens,
+                },
+            )
+        )
+    rotas.append(
+        (
+            "omniroute",
+            f"{settings.OMNIROUTE_BASE_URL}/chat/completions",
+            {
+                "Authorization": f"Bearer {_secret_value(settings.OMNIROUTE_API_KEY)}",
+                "Content-Type": "application/json",
+                "x-omniroute-compression": "off",
+            },
+            {
+                "model": settings.OMNIROUTE_MODEL,
+                "temperature": temperatura,
+                "stream": False,
+                "max_tokens": settings.OUTPUT_MAX_TOKENS,
+                "response_format": {"type": "json_object"},
+                # 16/out/2026 (TRAPS #45/#61): com o raciocinio ligado o modelo gasta o
+                # max_tokens pensando e devolve finish_reason=length; o follow-up falhava
+                # em silencio (antes o texto generico de reserva escondia o erro).
+                "thinking": {"type": "disabled"},
+                "messages": mensagens,
+            },
+        )
+    )
+    return rotas
+
+
 def draft_follow_up_step(
     tenant_id: str,
     phone: str,
@@ -1349,41 +1365,28 @@ def draft_follow_up_step(
                     + ". Escreva uma mensagem diferente, com um ângulo novo.",
                 }
             )
-        try:
-            http = httpx.Client(timeout=settings.REPLY_TIMEOUT_SECONDS)
+        # 06/nov/2026 (TRAPS #105): o follow-up chamava SO o OmniRoute `gpt-pool`, que trava (>60 s)
+        # e devolve 429 "All credentials ... exhausted"; a resposta normal ja usa o roteador local
+        # (OPENAI_BASE_URL, modelo do REPLY_AGENT_MODEL). Agora: roteador local primeiro, OmniRoute
+        # de reserva. Falha nos dois continua "nada sera enviado" (nunca texto generico).
+        for nome, url, cabecalhos, corpo in _follow_up_llm_rotas(settings, temperatura, mensagens):
             try:
-                response = http.post(
-                    f"{settings.OMNIROUTE_BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {_secret_value(settings.OMNIROUTE_API_KEY)}",
-                        "Content-Type": "application/json",
-                        "x-omniroute-compression": "off",
-                    },
-                    json={
-                        "model": settings.OMNIROUTE_MODEL,
-                        "temperature": temperatura,
-                        "stream": False,
-                        "max_tokens": settings.OUTPUT_MAX_TOKENS,
-                        "response_format": {"type": "json_object"},
-                        # 16/out/2026 (TRAPS #45/#61): com o raciocinio ligado o modelo gasta o
-                        # max_tokens pensando e devolve finish_reason=length; o follow-up falhava
-                        # em silencio (antes o texto generico de reserva escondia o erro).
-                        "thinking": {"type": "disabled"},
-                        "messages": mensagens,
-                    },
-                )
+                http = httpx.Client(timeout=settings.REPLY_TIMEOUT_SECONDS)
+                try:
+                    response = http.post(url, headers=cabecalhos, json=corpo)
+                finally:
+                    http.close()
                 if response.status_code != 200:
-                    raise RuntimeError("follow-up draft failed")
+                    raise RuntimeError(f"follow-up draft failed http={response.status_code}")
                 parsed = json.loads(response.text)
                 choice = parsed.get("choices", [{}])[0]
                 if choice.get("finish_reason") != "stop":
                     raise RuntimeError("follow-up draft invalid")
                 return ReplyDraft.model_validate_json(choice["message"]["content"])
-            finally:
-                http.close()
-        except Exception:
-            logger.warning("follow-up draft failed; nada sera enviado", exc_info=True)
-            return None
+            except Exception:
+                logger.warning("follow-up draft failed via %s; tentando a proxima rota", nome, exc_info=True)
+        logger.warning("follow-up draft failed em todas as rotas; o job tenta de novo")
+        raise FollowUpDraftIndisponivel("nenhuma rota de LLM respondeu ao rascunho do follow-up")
 
     draft = _gerar(0.8, None)
     if draft is None or draft.action != "send_text":
@@ -1429,7 +1432,7 @@ def send_follow_up_v2_turn_workflow(
 
     draft = draft_follow_up_step(tenant_id, phone, attempt, origin_turn_id)
     if draft is None:
-        # Modelo falhou ou o rascunho repetiria o que ja foi enviado: nao envia.
+        # Rascunho repetiria o que ja foi enviado (falha de LLM nao chega aqui: levanta e o job retenta).
         receipt = FollowUpAttemptReceipt(status="stopped")
         record_follow_up_v2_receipt_txn(tenant_id, origin_turn_id, attempt, receipt)
         return receipt

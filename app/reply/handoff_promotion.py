@@ -1,6 +1,6 @@
 """Promoção determinística de "vou encaminhar à equipe" para handoff real.
 
-Problema medido (tenant clínica Kyrios): o modelo responde "Recebi seus dados,
+Problema medido (tenant clínica): o modelo responde "Recebi seus dados,
 a equipe vai confirmar o dia e o horário" ou "vou encaminhar você para a
 recepção" com ``action="send_text"``. Só ``action="handoff"`` avisa o gestor
 (``manager_jid``) e entrega o contato à equipe; com ``send_text`` ninguém é

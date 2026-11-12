@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 from collections.abc import Iterator
 from typing import Any
 
@@ -64,6 +65,29 @@ _SCRUB_PATTERNS = (
 )
 
 
+# pydantic-ai manda o prompt de sistema do tenant em model_request_parameters.instruction_parts[].content mesmo
+# com include_content=False, e o scrubbing do Logfire so olha o nome do atributo de topo e nao casa objetos
+# aninhados. Entao o atributo inteiro e removido do span antes da exportacao (por dentro, como o proprio
+# Logfire faz com o scrubbing). Nada do que se perde e necessario: o uso de tokens fica em gen_ai.usage.*.
+_DROP_ATTRS = frozenset({"model_request_parameters"})
+
+
+def _remove_attrs_processor() -> Any:
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    class _RemoveAttrs(SpanProcessor):
+        def on_end(self, span: Any) -> None:  # noqa: D401
+            attrs = getattr(span, "_attributes", None)
+            if attrs and any(key in attrs for key in _DROP_ATTRS):
+                span._attributes = {k: v for k, v in attrs.items() if k not in _DROP_ATTRS}
+
+    return _RemoveAttrs()
+
+
+def extra_span_processors() -> list[Any]:
+    return [_remove_attrs_processor()]
+
+
 def scrubbing_options() -> Any:
     return logfire.ScrubbingOptions(extra_patterns=list(_SCRUB_PATTERNS))
 
@@ -74,7 +98,11 @@ def configure() -> None:
         return
     try:
         logfire.configure(
-            send_to_logfire="if-token-present", scrubbing=scrubbing_options()
+            service_name=os.environ.get("LOGFIRE_SERVICE_NAME") or "genius-next",
+            environment=os.environ.get("LOGFIRE_ENVIRONMENT") or None,
+            send_to_logfire="if-token-present",
+            scrubbing=scrubbing_options(),
+            additional_span_processors=extra_span_processors(),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("logfire: configure falhou (%s)", type(exc).__name__)
@@ -105,6 +133,7 @@ def instrument(app: Any) -> None:
     # O Next usa psycopg (nao asyncpg): o equivalente do pedido e o instrumento do psycopg.
     _try("psycopg", lambda: logfire.instrument_psycopg())
     _try("pydantic_ai", lambda: logfire.instrument_pydantic_ai(include_content=False))
+    _try("system_metrics", logfire.instrument_system_metrics)
 
 
 class _NoopSpan:

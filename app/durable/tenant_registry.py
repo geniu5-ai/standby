@@ -7,7 +7,12 @@ from functools import lru_cache
 from sqlalchemy import Engine, create_engine, make_url, text
 from sqlalchemy.orm import Session
 
-from app.contracts import TenantRegistryUpsertRequest, TenantRegistryUpsertResult
+from app.contracts import (
+    TenantRegistrySetEnabledRequest,
+    TenantRegistrySetEnabledResult,
+    TenantRegistryUpsertRequest,
+    TenantRegistryUpsertResult,
+)
 from app.db import sql_session, transaction
 from app.settings import get_settings
 
@@ -210,6 +215,74 @@ def upsert_tenant_registry_txn(
 ) -> TenantRegistryUpsertResult:
     """Self-serve (provider, instance) -> tenant link upsert."""
     return upsert_tenant_registry_with_session(sql_session(), request)
+
+
+_LOCK_REGISTRY_ROW_SQL = text(
+    """
+    /* registry.lock_row */
+    SELECT tenant_id, enabled
+    FROM genius_next.tenant_registry
+    WHERE provider = :provider
+      AND instance = :instance
+    FOR UPDATE
+    """
+)
+
+_SET_ENABLED_SQL = text(
+    """
+    /* registry.set_enabled */
+    UPDATE genius_next.tenant_registry
+    SET enabled = :enabled, updated_at = now()
+    WHERE provider = :provider
+      AND instance = :instance
+      AND tenant_id = :tenant_id
+    """
+)
+
+
+def set_tenant_enabled_with_session(
+    session: Session,
+    request: TenantRegistrySetEnabledRequest,
+    *,
+    enabled: bool,
+) -> TenantRegistrySetEnabledResult:
+    """Flip ``enabled`` of ONE row, only for the tenant that owns it.
+
+    Never creates a row and never reassigns ``tenant_id``: a missing row is
+    ``not_found`` and a row owned by another tenant is left untouched.
+    """
+    row = session.execute(
+        _LOCK_REGISTRY_ROW_SQL,
+        {"provider": request.provider, "instance": request.instance},
+    ).mappings().one_or_none()
+    if row is None:
+        return TenantRegistrySetEnabledResult(outcome="not_found", enabled=False)
+    if row["tenant_id"] != request.tenant_id:
+        return TenantRegistrySetEnabledResult(
+            outcome="instance_owned_by_other_tenant", enabled=False
+        )
+    if row["enabled"] == enabled:
+        return TenantRegistrySetEnabledResult(outcome="unchanged", enabled=enabled)
+    session.execute(
+        _SET_ENABLED_SQL,
+        {
+            "provider": request.provider,
+            "instance": request.instance,
+            "tenant_id": request.tenant_id,
+            "enabled": enabled,
+        },
+    )
+    return TenantRegistrySetEnabledResult(
+        outcome="enabled" if enabled else "disabled", enabled=enabled
+    )
+
+
+@transaction(isolation_level="SERIALIZABLE")
+def set_tenant_enabled_txn(
+    request: TenantRegistrySetEnabledRequest, enabled: bool
+) -> TenantRegistrySetEnabledResult:
+    """Enable/disable a (provider, instance) mapping for its owning tenant."""
+    return set_tenant_enabled_with_session(sql_session(), request, enabled=enabled)
 
 
 def knowledge_strategy_with_session(

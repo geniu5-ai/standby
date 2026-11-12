@@ -39,8 +39,9 @@ from deepeval.tracing.context import update_current_trace as _update_trace
 logger = logging.getLogger(__name__)
 
 
+# (comentário, não docstring: o docstring vira descrição no schema que o modelo lê)
+# O contrato de saída, agora tipado em vez de descrito em prosa.
 class AgentReply(BaseModel):
-    """O contrato de saída, agora tipado em vez de descrito em prosa."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -48,13 +49,14 @@ class AgentReply(BaseModel):
     text: str = Field(min_length=1, max_length=2_048)
 
 
+# (comentário, não docstring: o docstring vira descrição no schema que o modelo lê)
+# Voto como o modelo escreve: tolerante de proposito.
+#
+# Maiuscula, valor desconhecido ou chave a mais nunca derrubam o turno
+# (o paciente espera a resposta, nao o voto): tudo que nao for win/loss vira
+# open. O contrato estrito e :class:`AgentStatusSignal`.
+#
 class SinalDoAgente(BaseModel):
-    """Voto como o modelo escreve: tolerante de proposito.
-
-    Maiuscula, valor desconhecido ou chave a mais nunca derrubam o turno
-    (o paciente espera a resposta, nao o voto): tudo que nao for win/loss vira
-    open. O contrato estrito e :class:`AgentStatusSignal`.
-    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -71,12 +73,13 @@ class SinalDoAgente(BaseModel):
         )
 
 
+# (comentário, não docstring: o docstring vira descrição no schema que o modelo lê)
+# Saida com o voto de status (20/out/2026, specs/status-no-agente.md).
+#
+# So usada por tenant em ``STATUS_AGENT_*``: os demais seguem com o schema
+# de :class:`AgentReply`, sem um token a mais no prompt.
+#
 class AgentReplyComStatus(AgentReply):
-    """Saida com o voto de status (20/out/2026, specs/status-no-agente.md).
-
-    So usada por tenant em ``STATUS_AGENT_*``: os demais seguem com o schema
-    de :class:`AgentReply`, sem um token a mais no prompt.
-    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -100,8 +103,9 @@ class FatoDoAgente(BaseModel):
         return FatoConversa(tipo=tipo, detalhe=(self.detalhe or "")[:240])  # type: ignore[arg-type]
 
 
+# (comentário, não docstring: o docstring vira descrição no schema que o modelo lê)
+# Saida com fatos (23/out/2026). So para tenant em FATOS_SHADOW_TENANTS.
 class AgentReplyComFatos(AgentReplyComStatus):
-    """Saida com fatos (23/out/2026). So para tenant em FATOS_SHADOW_TENANTS."""
 
     fatos: list[FatoDoAgente] | None = None
 
@@ -188,6 +192,9 @@ class ReplyDeps:
     # onde um valor em reais pode legitimamente aparecer.
     vigiar_valores: bool = False
     fontes_de_valor: tuple[str, ...] = ()
+    # Ordem da venda (guardrail): fala do cliente neste turno e liga por tenant.
+    turno_do_cliente: str = ""
+    vigiar_ordem: bool = False
 
 
 # ``defer_model_check`` evita tocar em settings no import: o modelo real chega
@@ -199,7 +206,7 @@ class ReplyDeps:
 #   tool calling (padrao)  2 requests  5.439 tokens de entrada  ~5s
 #   JSON pedido no prompt  1 request   2.350 tokens de entrada  ~3s
 #
-# O deepseek-v4-flash erra a chamada de ferramenta, o Pydantic rejeita e ele
+# [Medido com deepseek-v4-flash, antes da troca de 05/nov/2026] o modelo erra a chamada de ferramenta, o Pydantic rejeita e ele
 # refaz — um retry em todo turno.  E o schema das ferramentas ainda custa ~3k
 # tokens de entrada por chamada.  Pedindo JSON no prompt ele acerta de primeira.
 #
@@ -210,7 +217,7 @@ class ReplyDeps:
 # ``NativeOutput`` (structured outputs do provedor) foi testado e recusado pela
 # lib: "Native structured output is not supported by this model".
 reply_agent = Agent(
-    "deepseek:deepseek-v4-flash",
+    "openai-chat:gpt-4o-mini",  # 05/nov/2026: DeepSeek fora; a chamada real passa REPLY_AGENT_MODEL
     output_type=PromptedOutput(AgentReply),
     deps_type=ReplyDeps,
     name="genius-next-reply",
@@ -231,7 +238,7 @@ reply_agent = Agent(
     # reescrito e valor em reais fora da entrada refeito uma vez, depois
     # bloqueado.  Detalhe em app/reply/guardrails.py.
     capabilities=[guardrail_de_saida()],
-    # O deepseek-v4-flash *pensa* antes de responder, e o pensamento e a maior
+    # [Medido com deepseek-v4-flash, antes da troca] o modelo *pensava* antes de responder, e o pensamento e a maior
     # fatia da espera do cliente.  Medido em 26/ago/2026, 8 perguntas x 2
     # rodadas com o prompt e o catalogo reais deste tenant:
     #
@@ -354,6 +361,7 @@ def draft_reply_with_agent(
         catalogo = tuple(list_catalog(session, tenant_id=turn.tenant_id))
         # Campanha nao e catalogo: so entra se vigente hoje (nunca levanta).
         campanhas = campanhas_vigentes(session, turn.tenant_id)
+        licoes = _licoes_do_turno(session, turn, settings)
         estrategia = knowledge_strategy_with_session(
             session, tenant_id=turn.tenant_id
         )
@@ -391,6 +399,16 @@ def draft_reply_with_agent(
     from app.context.campaigns import incluir_no_contexto
 
     incluir_no_contexto(context, campanhas)
+    if licoes:
+        context["lessons"] = licoes
+    if settings.ordem_da_venda_enabled(turn.tenant_id):
+        from app.reply.ordem_da_venda import etapa_da_venda
+
+        context["etapa_da_venda"] = etapa_da_venda(
+            " ".join(str(m.get("text", "")) for m in context.get("turn", []) if m.get("role") == "customer"),
+            tuple((str(i.get("role", "")), str(i.get("text", ""))) for i in context.get("history") or [] if isinstance(i, dict)),
+            chave=phone,
+        )
     if summary is not None:
         context.setdefault("client", {})["summary"] = summary
 
@@ -465,6 +483,10 @@ def draft_reply_with_agent(
         # A resposta foi trocada por handoff: o voto que veio com ela tambem
         # nao vale (mesma regra de _safe_output_guard_draft em flow.py).
         return barrado, "open"
+    # Juiz por turno: agenda em fundo e segue. Desligado por padrao (TURN_JUDGE_ENABLED).
+    from app.reply import turn_judge
+
+    turn_judge.schedule(settings=settings, tenant_id=turn.tenant_id, turn=turn, resposta=resposta.text)
     # "open" mantém o contrato de draft_reply_step: a classificação de status
     # é outra peça (app/status/) e este caminho não decide status nenhum.
     #
@@ -490,6 +512,37 @@ def draft_reply_with_agent(
         ),
         "open",
     )
+
+
+def _licoes_do_turno(session: Any, turn: Any, settings: Any) -> list[str]:
+    """Licoes APROVADAS (``genius_next.lessons``) para a ultima fala do cliente. Nunca levanta.
+
+    So para tenants em ``LESSONS_IN_AGENT_TENANTS`` (vazio = nenhum). Licao que cita valor em reais e
+    descartada: o contexto inteiro e fonte legitima do guardrail de preco, entao uma licao com preco
+    "autorizaria" esse valor na resposta.
+    """
+    lista = {t.strip() for t in str(getattr(settings, "LESSONS_IN_AGENT_TENANTS", "") or "").split(",") if t.strip()}
+    if turn.tenant_id not in lista:
+        return []
+    try:
+        from app.agent.lessons import search_lessons
+        from app.reply.price_guard import valores
+
+        ultima = ""
+        for event in reversed(getattr(turn, "events", None) or []):
+            texto = (getattr(event, "text_content", None) or "").strip()
+            if texto:
+                ultima = texto
+                break
+        if not ultima:
+            return []
+        achadas = search_lessons(session, tenant_id=turn.tenant_id, segmento=None, query=ultima, limit=3)
+        licoes = [li.content for li in achadas.lessons if not valores(li.content)]
+        logger.info("licoes no agente: tenant=%s achadas=%d usadas=%d", turn.tenant_id, len(achadas.lessons), len(licoes))
+        return licoes
+    except Exception:  # noqa: BLE001 - licao e dica opcional: nunca derruba o turno
+        logger.warning("licoes indisponiveis para o turno", exc_info=False)
+        return []
 
 
 def _fatos_do_agente(resposta: AgentReply) -> list[FatoConversa]:
@@ -594,7 +647,14 @@ def _run_agent(
     (valor em reais fora da entrada depois da refacao): quem chama decide o
     fallback.
     """
+    from app.settings import get_settings as _settings
+
+    turno_do_cliente = " ".join(
+        str(m.get("text", "")) for m in context.get("turn", []) if m.get("role") == "customer"
+    )
     deps = ReplyDeps(
+        turno_do_cliente=turno_do_cliente,
+        vigiar_ordem=_settings().ordem_da_venda_enabled(tenant_id),
         tenant_id=tenant_id,
         business_prompt=business_prompt,
         contract_rules=contract_rules,
