@@ -9,8 +9,7 @@ name: Monitor de saúde
 # tentativa é longo e há uma espera entre elas: uma cold start não pode virar incidente.
 # O critério de saúde é o mesmo do watchdog do Next: HTTP 200 e "ok" no corpo.
 on:
-  schedule:
-    - cron: "*/5 * * * *"
+# Agendamento movido para o QStash (schedules standby-health e standby-wake, scripts/qstash_schedule.py).
   workflow_dispatch:
 
 permissions:
