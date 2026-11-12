@@ -55,13 +55,13 @@ TURN_PRIORITY_FOLLOWUP = 0
 # Neon free: qualquer consulta reinicia o timer de 5 min para suspender o compute, e o plano grátis
 # tem 100 CU-h/mês. Por isso o polling é lento: a fila acorda por NOTIFY (conexão direta, sem -pooler);
 # o polling é só a rede de segurança. Não baixe estes números sem refazer a conta de CU-h.
-# Neon grátis suspende após 5 min sem consulta. Cada poll é uma consulta: com polling curto o banco
-# nunca dorme e estoura os 100 CU-h/mês. A fila acorda por NOTIFY (conexão direta); o poll é só rede de
-# segurança, e por isso é longo. Turno: 60 s de atraso máximo se o NOTIFY falhar.
+# Standby é contingência: fica quieto. Neon grátis suspende após 5 min sem consulta, e cada poll é uma
+# consulta. A fila acorda por NOTIFY (conexão direta); o poll de 30 min é só rede de segurança. Sem NOTIFY,
+# uma tarefa pode esperar até 30 min. O wake do QStash (de hora em hora) também consulta o banco.
 WORKERS: dict[str, tuple[int, float]] = {
-    TURN_QUEUE: (16, 60.0),
-    AUX_QUEUE: (6, 300.0),
-    CRON_QUEUE: (2, 600.0),
+    TURN_QUEUE: (16, 1800.0),
+    AUX_QUEUE: (6, 1800.0),
+    CRON_QUEUE: (2, 1800.0),
 }
 JOBS_RETENTION_HOURS = 7 * 24
 # Tarefas que seguram uma cadeia (follow-up, envio, Manager): uma falha de banco ou de rede por um
