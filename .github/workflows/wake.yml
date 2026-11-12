@@ -11,8 +11,7 @@ name: Wake do worker
 # Segredos do repositorio: WAKE_DATABASE_URL (role somente leitura), CONTROL_HMAC_SECRET.
 # Variavel opcional: WAKE_TENANTS (lista separada por virgula; vazio = todos).
 on:
-  schedule:
-    - cron: "7,27,47 * * * *"   # a cada 20 min, fora da hora cheia (alta carga do Actions)
+# Agendamento movido para o QStash (schedules standby-health e standby-wake, scripts/qstash_schedule.py).
   workflow_dispatch:
     inputs:
       force:
