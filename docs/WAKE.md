@@ -134,6 +134,66 @@ taxa por chave, por exemplo uma chave por tenant para limitar chamadas simultân
 mensagens com atraso exato (`Upstash-Not-Before`, até 7 dias no plano free) para acordar na hora de
 um follow-up longo.
 
+## Vigia da VPS 002 em modo alerta (11/nov/2026)
+
+O Standby é contingência: com a VPS 002 saudável ele não precisa estar acordado. O vigia inverte o
+gatilho: em vez de acordar o Render em horário fixo, o QStash **sonda a 002** e só chama o Standby
+se ela cair.
+
+```
+QStash schedule `vps002-watchdog` (*/5)        VPS 002                   Standby (Render)
+   │── GET /health ─────────────────────────────▶│  200 ok: nada acontece
+   │   falhou? 2 retentativas, 30 s entre elas    │
+   │── (todas falharam) failure_callback ────────────────────────────────▶ acorda (~60 s)
+   │   POST /v1/control/qstash-failover (assinado)                         │ sonda a 002 DE NOVO
+   │                                                                       │ ok: alarme falso (200)
+   │                                                                       │ caiu: log ERROR + webhook
+```
+
+- **Modo alerta, só isso.** A rota `/v1/control/qstash-failover` (`app/failover.py`) confirma a
+  queda por conta própria (3 tentativas de 10 s, critério do Next: HTTP 200 e `ok` no corpo), loga
+  em `ERROR` e, se `FAILOVER_ALERT_URL` existir, faz um `POST {"text", "details"}` nele. Não toca
+  em `DELIVERY_MODE`, não liga o `live`, não escreve no banco: assumir o atendimento é a trava 1 do
+  `AGENTS.md` e depende de critérios que o chairman ainda não escreveu.
+- **Aviso repetido:** o QStash chama de novo a cada ciclo enquanto a 002 estiver fora; o aviso tem
+  cooldown de `FAILOVER_ALERT_COOLDOWN_S` (padrão 30 min), por processo (melhor esforço).
+- **Aviso de volta (002 recuperada):** não vem daqui. Vem do monitor externo (Better Stack) ou do
+  `monitor.yml`; o QStash só chama na falha (um `callback` de sucesso dobraria as mensagens).
+- **Custo:** 288 mensagens por dia a cada 5 min (plano free: 1000). Retentativas e callbacks contam
+  só quando a 002 falha.
+- **Webhook genérico de propósito:** o mesmo `POST` serve ao Better Stack (incoming webhook), ao
+  Slack, ao Keep ou a qualquer ferramenta que o chairman adote; trocar de destino é trocar a
+  variável.
+- **Segundo gatilho, independente do QStash (Better Stack):** os monitores da 002 no Better Stack
+  checam a cada 30 s de 4 regiões. Um webhook de saída (`incident_change`, só `on_incident_started`)
+  chama `POST /v1/control/betterstack-incident` com o cabeçalho `X-Webhook-Secret` (o Better Stack não
+  assina o corpo; só aceita cabeçalho fixo ou basic auth). A rota só age nos monitores de
+  `BETTERSTACK_WATCHED_MONITORS`, confirma a queda com a mesma sonda e avisa pelo mesmo webhook. Os
+  dois gatilhos compartilham o cooldown do aviso.
+- **Criar o schedule:** `python scripts/qstash_schedule.py apply --schedule watchdog --aplicar`,
+  depois do deploy desta rota e das variáveis abaixo.
+
+Variáveis do Render: `FAILOVER_PROBE_URL` (o `/health` público da 002), `QSTASH_FAILOVER_URL` (a
+URL pública da rota, conferida contra o `sub` do JWT), `FAILOVER_ALERT_URL` (secreta, opcional) e as
+chaves `QSTASH_*` já descritas acima. Sem as chaves ou sem `FAILOVER_PROBE_URL` a rota responde 503.
+
+### Ponto aberto: o `monitor.yml` mantém o Render acordado
+
+`monitor.yml` consulta o `/health` do Standby **a cada 5 min**, bem abaixo dos 15 min de ociosidade
+do Render. Enquanto ele rodar nesse ritmo o serviço quase nunca dorme (~744 h das 750 h gratuitas),
+e o wake, seja o do Actions ou o do QStash, deixa de ser o que decide quando o Standby fica
+acordado. Para o Standby dormir com a 002 saudável, o monitor precisa de outro ritmo (por exemplo
+1 vez por dia, aceitando o cold start) ou de outro alvo (a 002, que é o que importa vigiar).
+Decisão do chairman; não foi alterado.
+
+### Antes de qualquer failover automático (fora deste modo)
+
+1. Sincronização Next → Neon ligada (`PARIDADE.md`): sem ela o Standby responderia com histórico velho.
+2. Trava contra duas respostas ao mesmo cliente e regra de volta (failback) com histerese.
+3. Porta de entrada para os webhooks (na borda, no mesmo hostname): a Evolution aponta para a 002 e
+   as instâncias de WhatsApp são somente leitura para o agente (trava 1).
+4. Critérios de failover escritos no `AGENTS.md` pelo chairman.
+
 ## Configuração
 
 Ver "Segredos e credenciais" e "Wake do worker" em [`OPERACAO.md`](OPERACAO.md).

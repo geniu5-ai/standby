@@ -40,6 +40,8 @@ O plano free **dorme após ~15 min sem tráfego de entrada**: a primeira chamada
 | `CONNECTOR_HMAC_SECRET` | segredo PROPRIO da rota `/webhook/connector` (conector OpenWA/waxum, `connectors/wa-bridge/`); assinatura `timestamp.corpo`; sem ele a rota responde 503 e ele nunca cai para o `HMAC_SECRET` da Evolution |
 | (wa-bridge, na 003) `TYPING_ENABLED`, `TYPING_PRE_DELAY_S`, `TYPING_REFRESH_S`, `TYPING_MAX_S` | digitando para a pessoa: começa em 5 s, como o Next; `TYPING_ENABLED=0` desliga |
 | `CONNECTOR_RELAY_INSTANCES`, `CONNECTOR_RELAY_MAX_AGE_SECONDS` | saída pelo conector sem sair do `record_only`: instâncias cujas respostas gravadas o conector pode buscar em `/v1/connector/outbox` (vazia = nada sai) e idade máxima da resposta (padrão 900 s) |
+| `FAILOVER_PROBE_URL`, `QSTASH_FAILOVER_URL`, `FAILOVER_ALERT_URL`, `FAILOVER_ALERT_COOLDOWN_S` | vigia da VPS 002 em modo alerta (`WAKE.md`): URL sondada, URL pública da rota `/v1/control/qstash-failover`, webhook de aviso (secreta, opcional) e intervalo mínimo entre avisos (padrão 1800 s); sem `FAILOVER_PROBE_URL` a rota responde 503 |
+| `BETTERSTACK_WEBHOOK_SECRET`, `BETTERSTACK_WATCHED_MONITORS` | segundo gatilho do vigia (`WAKE.md`): segredo do cabeçalho `X-Webhook-Secret` do webhook de saída do Better Stack (secreta) e os ids dos monitores da 002 (separados por vírgula); sem o segredo a rota `/v1/control/betterstack-incident` responde 503 |
 | `OMNIROUTE_API_KEY` | OmniRoute (resumos, motor legacy) |
 | `REPLY_ENGINE=agent`, `REPLY_AGENT_MODEL=openai:gpt-pool` | motor de resposta = Pydantic AI pelo combo `gpt-pool` do OmniRoute (o mesmo da produção, TRAPS #68 do Next) |
 | `OPENAI_BASE_URL=https://omni.geniuslabs.pro/v1`, `OPENAI_API_KEY` | como o Pydantic AI alcança o OmniRoute |
