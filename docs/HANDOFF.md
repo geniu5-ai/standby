@@ -16,6 +16,8 @@ bloco de estado mais novo divergir de um texto mais antigo, vale o bloco.
 | [`TRAPS.md`](TRAPS.md) | armadilhas já encontradas (sintoma, causa, correção, regra) |
 | [`GENIUS-DEV-AGENTS.md`](GENIUS-DEV-AGENTS.md) | cópia das regras da casa do Genius Dev (fonte: VPS 003) |
 
+> **🧭 Vigia da VPS 002 (11/nov/2026):** rota `POST /v1/control/qstash-failover` e `app/failover.py` (modo alerta: confirma a queda e avisa, nunca liga o `live`) com o schedule `vps002-watchdog` do QStash. Ponto aberto: o `monitor.yml` a cada 5 min mantém o Render acordado (`WAKE.md`).
+
 > **🧭 QStash (11/nov/2026):** rota `POST /v1/control/qstash-wake` (assinatura da Upstash), `app/qstash_auth.py` e `scripts/qstash_schedule.py` entraram para acordar o worker no lugar do relógio do Actions; o `wake.yml` fica como reserva. Estado da ativação (variáveis do Render, deploy, schedule) e a conta de horas do Render free: [`WAKE.md`](WAKE.md), seção "Wake pelo QStash".
 
 > **🧭 Saída pelo conector (11/nov/2026):** `GET /v1/connector/outbox` e `POST /v1/connector/outbox/{id}/ack` (segredo do conector) deixam o `wa-bridge` entregar pelo OpenWA as respostas gravadas da instância de teste, **sem sair do `record_only`**. Destinos só da lista `SEND_ALLOWLIST`; instâncias só de `CONNECTOR_RELAY_INSTANCES`. Não é o `live` (trava 1).
