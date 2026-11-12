@@ -53,3 +53,10 @@ python scripts/wake_check.py --check-only                            # mede, nã
 
 Antes de mexer: leia o bloco de estado acima e as últimas entradas de [`TRAPS.md`](TRAPS.md). Ao
 terminar: o que mudou fica escrito no lugar certo, na mesma entrega.
+
+## Estado de 12/nov/2026: Sync, vigia e economia de Neon/Render
+- **Sync Next → Neon ligada** (serviço `genius-pg-neon-sync` na 002, `PG_NEON_SYNC=on`, arquivo `/etc/genius-next-sync.env` `0600`). Papel `sync_rw` no Neon, só nas 6 tabelas da allowlist; isolamento provado (INSERT em `events`, UPDATE de `enabled` e CREATE TABLE negados). Conferir: `python -m app.sync.pg_neon --conferir` e `--esquema` na 002, como `ubuntu` com `HOME=/home/ubuntu` (com `sudo -E` sem `-H` o libpq lê certificado de `/root`). **Conversas, clientes e eventos não são sincronizados**: o Neon tem só a carga-base de 11/nov.
+- **Vigia da 002 em modo alerta:** Better Stack (webhook de saída `Standby · acordar quando a 002 cair (via QStash)`, só incidente aberto) → QStash (retenta 5x enquanto o Render acorda) → `POST /v1/control/betterstack-incident`. Confirma a queda com sonda própria; nunca liga o `live` (trava 1). Testado de ponta a ponta com `DELIVERED 200`. O webhook não filtra por monitor: qualquer incidente acorda o Standby e a sonda descarta o alarme falso.
+- **Economia (Neon grátis, 100 CU-h/mês):** workers com poll de 30 min (a fila acorda por NOTIFY na conexão direta, sem `-pooler`), crons de 30 min, wake do QStash de hora em hora com heartbeat do Better Stack. Uso até 11/nov: 8,67 CU-h.
+- Agendamento do health e do wake saiu do GitHub Actions e está no QStash (`standby-wake`).
+
