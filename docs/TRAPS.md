@@ -234,3 +234,12 @@ que a corrige. As do Next que também valem aqui estão citadas pelo número del
 
 **Regra:** `NOTIFY` não substitui poll para job agendado. Se o poll for lento, quem cria o job com atraso avisa na hora de vencer. Meça a latência de ponta a ponta (mensagem → `outbox`) depois de qualquer mudança de poll.
 
+
+### 27. Deploy novo quebrava o webhook com 503: Procrastinate sem versão fixa
+**Data:** 20/nov/2026 | **Impacto:** depois do deploy de `5ffa399`, todo `POST /webhook/evolution` voltava `503 Service unavailable`; o ingest falhava ao criar o job.
+
+**Causa:** `requirements.txt` tinha `procrastinate>=3.10,<4.0`. O build novo do Render instalou uma versão mais recente (3.11+/3.12), cujo SQL de defer usa o tipo `procrastinate_job_to_defer_v2[]`, que o esquema do Neon (criado pela 3.10) não tem: `psycopg.errors.UndefinedObject`. Nos logs: `ConnectorException` em `batch_defer_jobs`.
+
+**Correção:** `procrastinate==3.10.0` em `requirements.txt` e `pyproject.toml`. Atualizar a biblioteca só junto com a migração do esquema (`procrastinate schema --apply` no Neon), em PR próprio, testando o defer de verdade.
+
+**Regra:** biblioteca que dono de esquema no banco (Procrastinate) fica com versão exata; rebuild do Render não pode trocar a versão sozinho. Depois de todo deploy, mande um webhook de teste (`scripts/testar_webhook.sh`) antes de dar por bom.

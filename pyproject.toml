@@ -16,7 +16,7 @@ dependencies = [
     "pydantic-ai-harness==0.64.0",
     "logfire[fastapi,system-metrics]>=5.2.0",
     "uvicorn>=0.52.1",
-    "procrastinate>=3.10,<4",
+    "procrastinate==3.10.0",
     "psycopg-pool>=3.3.3",
     "deepeval==4.2.0",
     "qstash>=3.4,<4",
