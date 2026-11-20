@@ -141,7 +141,9 @@ VPS 002 está saudável, e o Render dorme (custo zero). Quem acorda na queda é 
 (`/v1/control/betterstack-incident`) ou o vigia do QStash (`/v1/control/qstash-failover`): a rota
 confirma a queda com a própria sonda e, se confirmar, **retoma** o schedule via API do QStash; a
 partir daí o QStash acorda e mantém o Standby de pé. Quando a 002 volta, o wake seguinte a sonda
-(`FAILOVER_PROBE_URL`) e, se ela responder, **pausa** o schedule de novo.
+(`FAILOVER_PROBE_URL`) e, se ela responder **e não houver job esperando** fora da fila `cron` (follow-up de
+30 min, 24 h, 48 h), **pausa** o schedule de novo. Com follow-up pendente o wake continua: é ele que
+acorda o serviço para o job vencer.
 
 - Variáveis do Render: `WAKE_AUTO=true`, `QSTASH_TOKEN`, `QSTASH_URL` (a regional, `us-east-1`),
   `WAKE_SCHEDULE_ID` (padrão `standby-wake`) e `FAILOVER_PROBE_URL`. Sem a flag nada muda.
