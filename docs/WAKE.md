@@ -134,6 +134,22 @@ taxa por chave, por exemplo uma chave por tenant para limitar chamadas simultân
 mensagens com atraso exato (`Upstash-Not-Before`, até 7 dias no plano free) para acordar na hora de
 um follow-up longo.
 
+## Wake só na queda: o Standby dorme com a 002 saudável (20/nov/2026)
+
+Com `WAKE_AUTO=true` (`app/wake_schedule.py`) o schedule `standby-wake` fica **pausado** enquanto a
+VPS 002 está saudável, e o Render dorme (custo zero). Quem acorda na queda é o Better Stack
+(`/v1/control/betterstack-incident`) ou o vigia do QStash (`/v1/control/qstash-failover`): a rota
+confirma a queda com a própria sonda e, se confirmar, **retoma** o schedule via API do QStash; a
+partir daí o QStash acorda e mantém o Standby de pé. Quando a 002 volta, o wake seguinte a sonda
+(`FAILOVER_PROBE_URL`) e, se ela responder, **pausa** o schedule de novo.
+
+- Variáveis do Render: `WAKE_AUTO=true`, `QSTASH_TOKEN`, `QSTASH_URL` (a regional, `us-east-1`),
+  `WAKE_SCHEDULE_ID` (padrão `standby-wake`) e `FAILOVER_PROBE_URL`. Sem a flag nada muda.
+- Falha ao pausar ou retomar só vira log; o alerta e o wake seguem.
+- O heartbeat do Better Stack do wake deixa de pulsar com o schedule pausado: pause ou remova esse
+  heartbeat, senão ele alerta à toa.
+- Não liga o `live` (trava 1).
+
 ## Vigia da VPS 002 em modo alerta (11/nov/2026)
 
 O Standby é contingência: com a VPS 002 saudável ele não precisa estar acordado. O vigia inverte o

@@ -813,6 +813,13 @@ async def control_qstash_wake(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="Unauthorized")
     resultado = await _estado_do_wake(runtime_settings, origem="qstash")
     _pulso_heartbeat()
+    if runtime_settings.WAKE_AUTO and runtime_settings.FAILOVER_PROBE_URL:
+        from app import failover, wake_schedule
+
+        sonda = await failover.sondar(runtime_settings.FAILOVER_PROBE_URL, tentativas=2)
+        if sonda.ok:
+            # 002 saudavel: o Standby nao precisa ficar acordado; pausa o wake e o Render dorme.
+            resultado = {**resultado, "dormindo": await wake_schedule.pausar(runtime_settings)}
     return resultado
 
 
@@ -867,6 +874,7 @@ async def control_qstash_failover(request: Request) -> dict[str, Any]:
         alert_url=alerta.get_secret_value() if alerta else None,
         cooldown_s=runtime_settings.FAILOVER_ALERT_COOLDOWN_S,
         callback=callback if isinstance(callback, dict) else {},
+        settings=runtime_settings,
     )
 
 
@@ -905,6 +913,7 @@ async def control_betterstack_incident(request: Request) -> dict[str, Any]:
         alert_url=alerta.get_secret_value() if alerta else None,
         cooldown_s=runtime_settings.FAILOVER_ALERT_COOLDOWN_S,
         callback={"status": "betterstack", "retried": None, "scheduleId": f"betterstack:{monitor_id}"},
+        settings=runtime_settings,
     )
 
 

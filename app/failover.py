@@ -119,6 +119,7 @@ async def tratar_callback(
     alert_url: str | None,
     cooldown_s: int,
     callback: dict[str, Any],
+    settings: Any = None,
 ) -> dict[str, Any]:
     """Miolo da rota: confirma a queda e avisa. Devolve o que decidiu (nunca levanta por causa do aviso)."""
     sonda = await sondar(probe_url)
@@ -140,4 +141,9 @@ async def tratar_callback(
             "Genius: a VPS 002 nao responde ao /health. O Standby acordou em modo alerta (record_only).",
             detalhes,
         )
-    return {"status": "alert", "mode": "alert", "sonda": sonda.as_dict(), "avisou": avisou}
+    retomado = False
+    if settings is not None:
+        from app import wake_schedule
+
+        retomado = await wake_schedule.retomar(settings)
+    return {"status": "alert", "mode": "alert", "sonda": sonda.as_dict(), "avisou": avisou, "wake_retomado": retomado}
