@@ -232,6 +232,8 @@ que a corrige. As do Next que também valem aqui estão citadas pelo número del
 
 **Correção:** `app/jobs.py` (só do Standby): `defer_once` agenda, para a hora em que o job vence, o mesmo `NOTIFY` do Procrastinate (`procrastinate_queue_v1#<fila>`, payload `job_inserted`), dois avisos (+1 s e +6 s) por causa do relógio. Só para atrasos de até 15 min (o processo ainda está acordado); acima disso vale o wake do QStash, que sobe o worker e busca o vencido. Não aumenta o poll nem o consumo de CU-h do Neon.
 
+**Medido depois do deploy (20/nov): 59 s da mensagem ao `outbox`.**
+
 **Regra:** `NOTIFY` não substitui poll para job agendado. Se o poll for lento, quem cria o job com atraso avisa na hora de vencer. Meça a latência de ponta a ponta (mensagem → `outbox`) depois de qualquer mudança de poll.
 
 
