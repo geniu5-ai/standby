@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     FAILOVER_PROBE_URL: str = ""
     FAILOVER_ALERT_URL: SecretStr | None = None
     FAILOVER_ALERT_COOLDOWN_S: int = Field(default=1800, ge=60, le=86400)
+    # Wake so na queda (app/wake_schedule.py): com WAKE_AUTO o schedule do QStash fica pausado com a
+    # 002 saudavel e e retomado na queda confirmada. Precisa de QSTASH_TOKEN e QSTASH_URL (regiao).
+    WAKE_AUTO: bool = False
+    WAKE_SCHEDULE_ID: str = "standby-wake"
+    QSTASH_TOKEN: SecretStr | None = None
+    QSTASH_URL: str = ""
     # Segundo gatilho do vigia: webhook de saida do Better Stack (incidente aberto). Autenticado por
     # segredo compartilhado no cabecalho X-Webhook-Secret; BETTERSTACK_WATCHED_MONITORS lista os ids
     # dos monitores da VPS 002 (separados por virgula). Sem o segredo a rota responde 503.
