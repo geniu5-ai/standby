@@ -225,3 +225,12 @@ que a corrige. As do Next que também valem aqui estão citadas pelo número del
 
 **Regra:** janela de consulta do relé tem que cobrir o maior atraso de resposta que se quer entregar.
 
+### 26. Resposta do agente demorava até 30 min: o NOTIFY sai antes de o job vencer
+**Data:** 20/nov/2026 | **Impacto:** no teste de ponta a ponta, a mensagem entrou às 23:44 e o turno só rodou às 00:08 (24 min); a resposta saiu certa (`record_only`, preço do catálogo), mas fora de qualquer prazo aceitável para um paciente. O mesmo vale para o follow-up de 5 min.
+
+**Causa:** o turno é criado com `schedule_in` (debounce de ~8 a 12 s). O Procrastinate manda o `NOTIFY` na **inserção**, quando o job ainda não venceu; o worker acorda, não acha nada vencido e dorme até o próximo poll. Com o poll de 1 s (antes de 12/nov) isso não aparecia; com o de **1800 s** (`#28`, economia de Neon) cada resposta espera o poll. O `NOTIFY` não resolve jobs com atraso.
+
+**Correção:** `app/jobs.py` (só do Standby): `defer_once` agenda, para a hora em que o job vence, o mesmo `NOTIFY` do Procrastinate (`procrastinate_queue_v1#<fila>`, payload `job_inserted`), dois avisos (+1 s e +6 s) por causa do relógio. Só para atrasos de até 15 min (o processo ainda está acordado); acima disso vale o wake do QStash, que sobe o worker e busca o vencido. Não aumenta o poll nem o consumo de CU-h do Neon.
+
+**Regra:** `NOTIFY` não substitui poll para job agendado. Se o poll for lento, quem cria o job com atraso avisa na hora de vencer. Meça a latência de ponta a ponta (mensagem → `outbox`) depois de qualquer mudança de poll.
+

@@ -17,7 +17,7 @@ catálogo, preço, conversa ou telefone em nenhum destes arquivos (`TRAPS` #20).
 | Documento | Para quê | Situação |
 |---|---|---|
 | [`OPERACAO.md`](OPERACAO.md) | onde está (Render, Neon), variáveis, segredos, cofre, roles, como testar, wake, backup, pendências | canônico |
-| [`WAKE.md`](WAKE.md) | por que o worker dorme no Render free, como o Actions o acorda, alternativas avaliadas, próximos passos (failover) | canônico |
+| [`WAKE.md`](WAKE.md) | por que o worker dorme no Render free, como o QStash o acorda, alternativas avaliadas, próximos passos (failover) | canônico |
 | [`MONITORAMENTO.md`](MONITORAMENTO.md) | o que vigia o quê fora da Oracle: Better Stack (monitores, heartbeats, página de status, limites do plano grátis), QStash, ferramentas avaliadas | canônico |
 | [`GATEWAYS-WHATSAPP.md`](GATEWAYS-WHATSAPP.md) | gateways de WhatsApp: comparação, laboratório na VPS 003, resultados medidos, formato dos webhooks, o conector `wa-bridge` e como operar | canônico |
 | [`TRAPS.md`](TRAPS.md) | armadilhas já encontradas (sintoma, causa, correção, regra); numeração própria, citada em todo lugar: **não renumerar** | canônico |

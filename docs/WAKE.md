@@ -1,7 +1,7 @@
 # Wake do worker
 
 Como o Standby (Procrastinate dentro de um serviço web no Render free) continua cumprindo prazos
-mesmo dormindo. Estado em 03/nov/2026.
+mesmo dormindo. **Hoje quem acorda é o QStash** (seção "Wake pelo QStash", abaixo); o desenho do Actions (03/nov) fica como histórico e reserva manual. Resposta rápida de job com atraso: seção "Job com atraso".
 
 ## O problema
 
@@ -220,3 +220,14 @@ Ver "Segredos e credenciais" e "Wake do worker" em [`OPERACAO.md`](OPERACAO.md).
    longos, em vez do schedule fixo. Mexe no `app/durable/followup.py`, que é idêntico ao do Next:
    exige PR espelho.
 3. `MANAGER_PENDENTES_TENANTS` definido, para o `pendentes_sweep` abordar quem ficou sem resposta.
+
+## Job com atraso: aviso na hora em que vence (20/nov/2026)
+O poll dos workers é de 30 min (economia de Neon, `#28`). O `NOTIFY` do Postgres sai na **inserção** do
+job; um job criado com `schedule_in` (debounce do turno de 8 a 12 s, follow-up de 5 min) ainda não
+venceu nesse instante, então esperava o poll seguinte: 24 min medidos até a resposta (`TRAPS` #26).
+`defer_once` (`app/jobs.py`, só do Standby) agora agenda dois `NOTIFY` (`procrastinate_queue_v1#<fila>`,
+payload `job_inserted`) para +1 s e +6 s depois de o job vencer, quando o atraso é de até 15 min (o
+processo que criou o job ainda está acordado). Acima disso, o QStash sobe o worker e ele busca o vencido.
+Não mexe no poll nem no consumo de CU-h. Para conferir: mande uma mensagem de teste
+(`scripts/testar_webhook.sh`) e veja o tempo até a linha em `outbox`; o esperado é de segundos, não minutos.
+
