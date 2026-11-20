@@ -335,6 +335,8 @@ def test_queued_sender_rechecks_before_drafting_or_outbox(
 
     drafted: list[int] = []
     receipts: list[Any] = []
+    # Sem recibo gravado: o teste nao pode depender da tabela follow_up_attempt_receipts do banco.
+    monkeypatch.setattr(followup, "follow_up_v2_receipt_status_txn", lambda *_: None)
     monkeypatch.setattr(followup, "should_continue_follow_up_txn", lambda *_: False)
     monkeypatch.setattr(
         followup, "record_follow_up_v2_receipt_txn", lambda *_args: receipts.append(_args[-1])
