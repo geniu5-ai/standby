@@ -151,3 +151,29 @@ def test_rota_do_wake_por_hmac_continua_igual(monkeypatch):
         assert TestClient(main_mod.app).post("/v1/control/wake", content=b"{}").status_code == 401
     finally:
         get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("pendente,esperado", [(True, False), (False, True)])
+def test_wake_so_pausa_com_002_saudavel_e_sem_job_esperando(cliente, monkeypatch, pendente, esperado):
+    from app import failover, wake_schedule
+    from app.settings import get_settings
+
+    monkeypatch.setenv("WAKE_AUTO", "true")
+    monkeypatch.setenv("FAILOVER_PROBE_URL", "https://vps.exemplo.test/health")
+    get_settings.cache_clear()
+    pausou = []
+
+    async def sonda_ok(url, **kw):
+        return failover.Sonda(True, 1, 200, None)
+
+    async def pausar(settings, **kw):
+        pausou.append(1)
+        return True
+
+    monkeypatch.setattr(failover, "sondar", sonda_ok)
+    monkeypatch.setattr(wake_schedule, "pausar", pausar)
+    monkeypatch.setattr(wake, "tem_trabalho_futuro", lambda *a, **k: pendente)
+    r = cliente.post("/v1/control/qstash-wake", content=b"", headers={"Upstash-Signature": _assinar(b"")})
+    assert r.status_code == 200
+    assert r.json()["dormindo"] is esperado and r.json()["trabalho_pendente"] is pendente
+    assert bool(pausou) is esperado

@@ -814,12 +814,21 @@ async def control_qstash_wake(request: Request) -> dict[str, Any]:
     resultado = await _estado_do_wake(runtime_settings, origem="qstash")
     _pulso_heartbeat()
     if runtime_settings.WAKE_AUTO and runtime_settings.FAILOVER_PROBE_URL:
-        from app import failover, wake_schedule
+        from app import failover, wake, wake_schedule
 
         sonda = await failover.sondar(runtime_settings.FAILOVER_PROBE_URL, tentativas=2)
         if sonda.ok:
-            # 002 saudavel: o Standby nao precisa ficar acordado; pausa o wake e o Render dorme.
-            resultado = {**resultado, "dormindo": await wake_schedule.pausar(runtime_settings)}
+            # 002 saudavel E sem follow-up/turno esperando: o Standby pode dormir; pausa o wake.
+            # Com trabalho pendente o wake continua: e ele que acorda o servico para o job vencer.
+            try:
+                pendente = await asyncio.to_thread(wake.tem_trabalho_futuro, runtime_settings.DATABASE_URL)
+            except Exception:
+                pendente = True  # na duvida, nao dorme
+            resultado = {
+                **resultado,
+                "trabalho_pendente": pendente,
+                "dormindo": False if pendente else await wake_schedule.pausar(runtime_settings),
+            }
     return resultado
 
 

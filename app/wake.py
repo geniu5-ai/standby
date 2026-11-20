@@ -129,3 +129,26 @@ def consultar(database_url: str, *, tenants: list[str]) -> WakeState:
             WAKE_SQL, wake_params(tenants=tenants)
         ).fetchone()
     return state_from_row(row)
+
+
+TRABALHO_FUTURO_SQL = """
+SELECT count(*) FROM procrastinate_jobs AS j
+ WHERE j.status = 'todo' AND j.queue_name <> %(cron_queue)s
+"""
+
+
+def tem_trabalho_futuro(database_url: str) -> bool:
+    """True se ha job fora da fila cron esperando (follow-up de 30 min, 24 h, 48 h, turno com atraso).
+
+    Enquanto houver, o wake do QStash nao pode ser pausado: ele e quem acorda o servico para o job
+    vencer. So com a fila vazia (alem dos relogios) o Standby pode dormir com a 002 saudavel.
+    """
+    from sqlalchemy.orm import Session
+
+    from app.durable.tenant_registry import get_registry_engine
+
+    with Session(get_registry_engine(database_url)) as session:
+        row = session.connection().exec_driver_sql(
+            TRABALHO_FUTURO_SQL, {"cron_queue": CRON_QUEUE}
+        ).fetchone()
+    return bool(row and row[0])
