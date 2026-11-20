@@ -194,7 +194,7 @@ nos logs de quem tiver acesso.
 
 ## Tenant de teste
 
-`mariaeduarda_ficticia` (instância `mariaeduarda-ficticia`, que **não existe** no Evolution):
+`mariaeduarda` (instância `mariaeduarda-ficticia`, que **não existe** no Evolution):
 `manager_jid` nulo (handoff não avisa ninguém), follow-up desligado em `record_only`, 4 perfis de
 prompt copiados do tenant `genius` do Next (`reply_normal` v32, `persuasao` v5, `guardrail` v2,
 `criticas` v8) e 11 itens de catálogo com **valores fictícios**.
@@ -209,9 +209,9 @@ Resposta `202` com `workflow_id` = entrou. A resposta do agente sai em ~20 s:
 
 ```sql
 select status, error, decision->>'action', decision->>'draft_text' from genius_next.turns
- where tenant_id = 'mariaeduarda_ficticia' order by created_at desc limit 3;
+ where tenant_id = 'mariaeduarda' order by created_at desc limit 3;
 select delivery_mode, delivery_status, payload->>'text' from genius_next.outbox
- where tenant_id = 'mariaeduarda_ficticia' order by created_at desc limit 6;
+ where tenant_id = 'mariaeduarda' order by created_at desc limit 6;
 ```
 
 Tudo deve estar `record_only` / `recorded`. Nunca use número real de WhatsApp como cliente de teste.
