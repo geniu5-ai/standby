@@ -61,7 +61,7 @@ falham no Next). Nunca use número real de WhatsApp como cliente de teste.
 | [`docs/INDEX.md`](docs/INDEX.md) | índice de toda a documentação, marcando o que é canônico e o que é histórico |
 | [`docs/HANDOFF.md`](docs/HANDOFF.md) | estado atual e por onde começar uma sessão fria |
 | [`docs/OPERACAO.md`](docs/OPERACAO.md) | onde está, variáveis, credenciais, cofre, como testar, pendências |
-| [`docs/WAKE.md`](docs/WAKE.md) | por que o worker dorme no Render free e como o Actions o acorda |
+| [`docs/WAKE.md`](docs/WAKE.md) | por que o worker dorme no Render free e como o QStash o acorda (o Actions é reserva manual) |
 | [`docs/TRAPS.md`](docs/TRAPS.md) | armadilhas já encontradas: sintoma, causa, correção e regra |
 | [`docs/PARIDADE.md`](docs/PARIDADE.md) | paridade com o Genius Next (igual × separado), checagem por hash de `app/` |
 | [`docs/COFRE-IDEIAS.md`](docs/COFRE-IDEIAS.md) | as seis ideias do cofre, decisões e alternativas avaliadas |

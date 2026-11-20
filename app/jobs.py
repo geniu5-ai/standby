@@ -29,7 +29,9 @@ Regras de uso:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -131,8 +133,38 @@ def _options(
     return opts
 
 
-def _submit(task: Any, opts: dict[str, Any], kwargs: dict[str, Any]) -> None:
-    task.configure(**opts).defer(**kwargs)
+def _submit(task: Any, opts: dict[str, Any], kwargs: dict[str, Any]) -> int | None:
+    return task.configure(**opts).defer(**kwargs)
+
+
+# Standby (nao existe no Next): com o poll de 30 min, um job criado com ``schedule_in`` (o debounce do
+# turno, o follow-up de 5 min) so seria visto no poll seguinte: o NOTIFY do Postgres sai na INSERCAO,
+# quando o job ainda nao venceu, e nada avisa na hora em que ele vence. O processo que criou o job
+# esta acordado (acabou de atender a requisicao), entao ele mesmo avisa na hora certa. Acima do
+# limite o Render ja pode ter dormido: ai vale o wake do QStash, que sobe o worker e busca o vencido.
+_ACORDAR_ATE_S = 900
+_ACORDAR_FOLGAS_S = (1.0, 6.0)  # dois avisos, para absorver a diferenca de relogio entre app e banco
+
+
+def _notificar_fila(queue: str, job_id: int | None) -> None:
+    """Manda o mesmo NOTIFY que o Procrastinate manda na insercao; o worker acorda e busca o vencido."""
+    import psycopg
+
+    payload = json.dumps({"type": "job_inserted", "job_id": job_id})
+    try:
+        with psycopg.connect(_conninfo(), autocommit=True, connect_timeout=10) as conn:
+            conn.execute("select pg_notify(%s, %s)", (f"procrastinate_queue_v1#{queue}", payload))
+    except Exception:  # sem o aviso so volta o poll; nunca derruba o app
+        logger.warning("aviso de job vencido falhou (fila %s)", queue, exc_info=True)
+
+
+def _acordar_na_hora(queue: str, job_id: int | None, schedule_in: float | None) -> None:
+    if schedule_in is None or schedule_in <= 0 or schedule_in > _ACORDAR_ATE_S:
+        return
+    for folga in _ACORDAR_FOLGAS_S:
+        timer = threading.Timer(schedule_in + folga, _notificar_fila, args=(queue, job_id))
+        timer.daemon = True
+        timer.start()
 
 
 def defer_once(
@@ -146,9 +178,10 @@ def defer_once(
 ) -> bool:
     """Cria o job; ``False`` quando ja havia um igual esperando (``queueing_lock``). Sincrono."""
     try:
-        _submit(task, _options(lock, queueing_lock, priority, schedule_in), kwargs)
+        job_id = _submit(task, _options(lock, queueing_lock, priority, schedule_in), kwargs)
     except AlreadyEnqueued:
         return False
+    _acordar_na_hora(task.queue, job_id, schedule_in)
     return True
 
 
